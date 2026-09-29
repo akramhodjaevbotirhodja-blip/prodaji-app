@@ -90,6 +90,7 @@
   }
   // этапы: семь рабочих по порядку + «Отменён» отдельно
   const CANCEL = 'Отменён';
+  const CLOSED = 'Сделка закрыта';
   const flow = () => S.dicts.stages.filter((s) => s !== CANCEL);
   const stageNo = (o) => flow().indexOf(o.stage) + 1;
   const pips = (o) => {
@@ -156,7 +157,8 @@
       const f = S.filters;
       const list = await cached('orders', range(f.period));
       const q = f.q.trim().toLowerCase();
-      const rows = list.filter((o) =>
+      // закрытые сделки живут в «Клиентах»: здесь — только если выбран их этап или ищем
+      const rows = list.filter((o) => (o.stage !== CLOSED || f.stage === CLOSED || q) &&
         STATUS_FILTERS[f.status](o) && (f.stage === 'all' || o.stage === f.stage) &&
         (!q || [o.client, o.company, o.phone, String(o.id)].some((v) => String(v || '').toLowerCase().includes(q))));
       const sum = rows.filter((o) => o.stage !== 'Отменён').reduce((s, o) => s + o.total, 0);
@@ -171,6 +173,21 @@
         <div class="hint" style="margin:0 6px 8px">${rows.length} заказов · ${money(sum)} сум</div>
         <div class="list">${rows.map(orderRow).join('') || '<div class="center hint">Заказов нет</div>'}</div>
         <button class="fab" data-act="new" aria-label="Новый заказ">+</button>`;
+    },
+
+    // клиентская база: клиенты, у которых есть закрытая сделка (только руководитель)
+    async clients() {
+      const all = clientGroups(await cached('orders', {}));
+      const q = (S.clientQ || '').trim().toLowerCase();
+      const rows = all.filter((c) => !q || [c.name, c.phone, c.instagram].some((v) => String(v || '').toLowerCase().includes(q)));
+      return `<h1>Клиенты</h1>
+        <input class="search" type="search" placeholder="Поиск: имя, телефон, Instagram" value="${esc(S.clientQ || '')}" data-input="cq">
+        <div class="hint" style="margin:0 6px 8px">${rows.length} клиентов · закрытые сделки на ${money(rows.reduce((s, c) => s + c.closedSum, 0))} сум</div>
+        <div class="list">${rows.map((c) => `<div class="row tap" data-act="client" data-key="${esc(c.key)}">
+          <div class="grow"><div class="title">${esc(c.name)}</div>
+          <div class="sub">${esc(c.phone || c.instagram || '')}${c.phone || c.instagram ? ' · ' : ''}${c.orders.length} зак. · последний ${fmtDate(c.last)}</div></div>
+          <div class="amt"><b>${money(c.total)}</b>${c.rest > 0 ? `<div class="red">−${money(c.rest)}</div>` : ''}</div></div>`).join('')
+          || '<div class="center hint">Пока нет клиентов с закрытыми сделками</div>'}</div>`;
     },
 
     async debtors() {
@@ -232,6 +249,29 @@
       return html;
     },
   };
+
+  // Один клиент = один телефон (последние 9 цифр); без телефона — Instagram, иначе имя.
+  // В базу попадают клиенты, у которых есть хотя бы одна закрытая сделка; в карточке — все их заказы.
+  function clientGroups(list) {
+    const m = new Map();
+    list.forEach((o) => {
+      const digits = String(o.phone || '').replace(/\D/g, '').slice(-9);
+      const key = digits.length === 9 ? 'p' + digits : o.instagram ? 'i' + o.instagram.toLowerCase()
+        : 'n' + String(o.client || o.company || '').trim().toLowerCase();
+      if (key === 'n') return;
+      const c = m.get(key) || { key, orders: [] };
+      c.orders.push(o); m.set(key, c);
+    });
+    return [...m.values()].filter((c) => c.orders.some((o) => o.stage === CLOSED)).map((c) => {
+      const os = c.orders.sort((a, b) => b.order_date.localeCompare(a.order_date) || b.id - a.id);
+      const live = os.filter((o) => o.stage !== CANCEL), pick = (f) => (os.find((o) => o[f]) || {})[f];
+      // «(из Instagram)» из старого Excel — не имя; тогда показываем компанию / текст печати
+      const realName = (os.find((o) => o.client && !/^\(.*\)$/.test(o.client.trim())) || {}).client;
+      return { ...c, name: realName || pick('company') || pick('client') || 'Без имени', phone: pick('phone'), instagram: pick('instagram'),
+        last: os[0].order_date, total: live.reduce((s, o) => s + o.total, 0), rest: live.reduce((s, o) => s + Math.max(0, o.rest), 0),
+        closedSum: os.filter((o) => o.stage === CLOSED).reduce((s, o) => s + o.total, 0) };
+    }).sort((a, b) => b.last.localeCompare(a.last));
+  }
 
   const open = (o) => o.stage !== flow()[flow().length - 1] && o.stage !== CANCEL;
   const STATUS_FILTERS = {
@@ -333,6 +373,24 @@
 
   // ---------- вложенные экраны ----------
   const VIEWS = {
+    // карточка клиента: контакты, итоги и все его заказы
+    async client(v) {
+      const c = clientGroups(await cached('orders', {})).find((x) => x.key === v.key);
+      if (!c) return '<div class="center hint">Клиент не найден</div>';
+      const info = [['Телефон', c.phone ? `<a href="tel:${esc(c.phone.replace(/\s/g, ''))}">${esc(c.phone)}</a>` : ''],
+        ['Instagram', c.instagram ? `<a href="${esc(igUrl(c.instagram))}" data-act="link">${esc(c.instagram)}</a>` : ''],
+        ['Компания', (c.orders.find((o) => o.company) || {}).company ? esc(c.orders.find((o) => o.company).company) : '']]
+        .filter(([, x]) => x).map(([k, x]) => `<div class="row"><span class="hint" style="width:96px;flex:none">${k}</span><span class="grow">${x}</span></div>`).join('');
+      return `<h1>${esc(c.name)}</h1>
+        ${info ? `<div class="list">${info}</div>` : ''}
+        <div class="kpis" style="margin-top:8px">
+          <div class="kpi"><div class="k">Заказов</div><div class="v">${c.orders.length}</div></div>
+          <div class="kpi"><div class="k">На сумму</div><div class="v">${money(c.total)}</div>${c.rest > 0 ? `<div class="hint red">долг ${money(c.rest)}</div>` : ''}</div>
+        </div>
+        <h2>Заказы клиента</h2>
+        <div class="list">${c.orders.map(orderRow).join('')}</div>`;
+    },
+
     // все расходы за период дашборда
     async expenses() {
       const r = S.dash.period === 'custom' ? { from: S.dash.from, to: S.dash.to } : range(S.dash.period);
@@ -487,6 +545,7 @@
   const ACTS = {
     reload: () => { cache.clear(); render(); },
     tab: (el) => setTab(el.dataset.v),
+    client: (el) => push({ type: 'client', key: el.dataset.key }),
     period: (el) => { S.filters.period = el.dataset.v; render(); },
     status: (el) => { S.filters.status = el.dataset.v; render(); },
     fstage: (el) => { S.filters.stage = el.dataset.v; render(); },
@@ -653,7 +712,10 @@
   $app.addEventListener('input', (e) => {
     const k = e.target.dataset.input;
     if (e.target.closest('#items')) recalcForm();
-    if (k === 'q') { S.filters.q = e.target.value; clearTimeout(ACTS.qt); ACTS.qt = setTimeout(() => { const pos = e.target.selectionStart; render().then(() => { const s = $app.querySelector('[data-input=q]'); if (s) { s.focus(); s.setSelectionRange(pos, pos); } }); }, 350); }
+    if (k === 'q' || k === 'cq') {
+      if (k === 'q') S.filters.q = e.target.value; else S.clientQ = e.target.value;
+      clearTimeout(ACTS.qt); ACTS.qt = setTimeout(() => { const pos = e.target.selectionStart; render().then(() => { const s = $app.querySelector(`[data-input=${k}]`); if (s) { s.focus(); s.setSelectionRange(pos, pos); } }); }, 350);
+    }
   });
   $app.addEventListener('change', async (e) => {
     const k = e.target.dataset.input;
@@ -693,6 +755,7 @@
     try {
       const me = await window.api('me');
       S.user = me.user; setMe(me); $tabs.hidden = false;
+      $tabs.querySelector('[data-tab=clients]').hidden = !isOwner(); // клиентская база — только руководителю
       if (new URLSearchParams(location.search).get('tab') === 'more') S.tab = 'more'; // кнопка из уведомления о заявке
       render();
     } catch (e) {
