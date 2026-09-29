@@ -373,6 +373,31 @@
 
   // ---------- вложенные экраны ----------
   const VIEWS = {
+    // выбор второго заказа того же клиента, который вольётся в этот
+    async merge(v) {
+      const list = await cached('orders', {});
+      const me = list.find((o) => o.id === v.id);
+      if (!me) return '<div class="center hint">Заказ не найден</div>';
+      const phone9 = (o) => String(o.phone || '').replace(/\D/g, '').slice(-9);
+      const nm = (s) => String(s || '').trim().toLowerCase();
+      const same = (o) => (phone9(me).length === 9 && phone9(o) === phone9(me)) || (me.instagram && nm(o.instagram) === nm(me.instagram))
+        || [me.client, me.company].some((x) => nm(x) && !/^\(.*\)$/.test(x.trim()) && [o.client, o.company].some((y) => nm(y) === nm(x)));
+      const others = list.filter((o) => o.id !== me.id);
+      const similar = others.filter(same);
+      const q = (S.mergeQ || '').trim().toLowerCase();
+      const found = q ? others.filter((o) => !similar.includes(o) &&
+        [o.client, o.company, o.phone, o.instagram, String(o.id)].some((x) => String(x || '').toLowerCase().includes(q))).slice(0, 30) : [];
+      const pickRow = (o) => orderRow(o).replace('data-act="open"', `data-act="mergepick"`);
+      return `<h1>Объединить с №${me.id}</h1>
+        <p class="hint" style="margin:0 6px 10px">Выберите второй заказ этого клиента. Его продукты и оплаты перейдут в №${me.id},
+          а сам он исчезнет из списков. Сделки в amoCRM не меняются.</p>
+        <h2>Похожие заказы</h2>
+        <div class="list">${similar.map(pickRow).join('') || '<div class="row hint">Похожих заказов не нашлось — найдите через поиск</div>'}</div>
+        <h2>Поиск</h2>
+        <input class="search" type="search" placeholder="Клиент, телефон, Instagram или №" value="${esc(S.mergeQ || '')}" data-input="mq">
+        <div class="list">${found.map(pickRow).join('')}</div>`;
+    },
+
     // карточка клиента: контакты, итоги и все его заказы
     async client(v) {
       const c = clientGroups(await cached('orders', {})).find((x) => x.key === v.key);
@@ -453,6 +478,7 @@
           ${receiptPicker()}
           <button class="btn" data-act="payadd">Сохранить оплату</button></div>` : ''}
         <button class="btn ghost" data-act="edit">Редактировать заказ</button>
+        <button class="btn ghost" data-act="merge">Объединить с другим заказом</button>
         ${isOwner() ? '<button class="btn danger" data-act="delete">Удалить заказ</button>' : ''}`;
     },
 
@@ -546,6 +572,14 @@
     reload: () => { cache.clear(); render(); },
     tab: (el) => setTab(el.dataset.v),
     client: (el) => push({ type: 'client', key: el.dataset.key }),
+    merge: () => { S.mergeQ = ''; push({ type: 'merge', id: S.stack[S.stack.length - 1].id }); },
+    async mergepick(el) {
+      const v = S.stack[S.stack.length - 1], from = Number(el.dataset.id);
+      if (!(await ask(`Объединить заказ №${from} в №${v.id}? Продукты и оплаты №${from} перейдут в №${v.id}, а №${from} исчезнет.`))) return;
+      try {
+        await call('order_merge', { id: v.id, from }); haptic('success'); toast(`№${from} объединён с №${v.id}`); pop();
+      } catch { /* call уже показал ошибку */ }
+    },
     period: (el) => { S.filters.period = el.dataset.v; render(); },
     status: (el) => { S.filters.status = el.dataset.v; render(); },
     fstage: (el) => { S.filters.stage = el.dataset.v; render(); },
@@ -712,8 +746,8 @@
   $app.addEventListener('input', (e) => {
     const k = e.target.dataset.input;
     if (e.target.closest('#items')) recalcForm();
-    if (k === 'q' || k === 'cq') {
-      if (k === 'q') S.filters.q = e.target.value; else S.clientQ = e.target.value;
+    if (k === 'q' || k === 'cq' || k === 'mq') {
+      if (k === 'q') S.filters.q = e.target.value; else if (k === 'cq') S.clientQ = e.target.value; else S.mergeQ = e.target.value;
       clearTimeout(ACTS.qt); ACTS.qt = setTimeout(() => { const pos = e.target.selectionStart; render().then(() => { const s = $app.querySelector(`[data-input=${k}]`); if (s) { s.focus(); s.setSelectionRange(pos, pos); } }); }, 350);
     }
   });

@@ -97,6 +97,14 @@
         if (p.payment && Number(p.payment.amount) > 0) A.payment_add({ order_id: id, ...p.payment });
         return A.order({ id });
       },
+      order_merge: (p) => {
+        const into = find(p.id), from = find(p.from);
+        db.items.forEach((i) => { if (i.order_id === from.id) i.order_id = into.id; });
+        db.payments.forEach((x) => { if (x.order_id === from.id) x.order_id = into.id; });
+        ['client', 'company', 'phone', 'instagram', 'source', 'delivery_type', 'delivery_region', 'delivery'].forEach((f) => { into[f] = into[f] || from[f]; });
+        db.orders = db.orders.filter((o) => o !== from);
+        return A.order({ id: into.id });
+      },
       order_stage: (p) => { find(p.id).stage = p.stage; return A.order(p); },
       order_delete: (p) => { if (user.role !== 'owner') throw new Error('Доступно только руководителю'); db.orders = db.orders.filter((o) => o.id !== Number(p.id)); return { ok: true }; },
       payment_add: (p) => {
