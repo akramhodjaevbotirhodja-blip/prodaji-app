@@ -32,6 +32,7 @@
     products: ['Печать автомат', 'Печать пластик', 'Печать металл', 'Штамп', 'Датер / нумератор', 'Табличка', 'Бейдж', 'Наклейка',
       'Сертификат', 'Визитка', 'Баннер', 'Логотип / дизайн', 'Подушка / краска', 'Пакеты', 'Другое'].map((name) => ({ name, active: true })),
     stages: STAGES,
+    expense_categories: ['Материалы', 'Реклама', 'Зарплата', 'Аренда', 'Доставка', 'Коммунальные', 'Налоги', 'Прочее'].map((name) => ({ name, active: true })),
   };
 
   function demoApi() {
@@ -44,7 +45,9 @@
     // этапы в демо разбросаны по заказам, чтобы было видно все пять
     db.orders.forEach((o, i) => { if (!STAGES.includes(o.stage)) o.stage = STAGES[i % (STAGES.length - 1)]; });
     db.requests = [{ telegram_id: 777000111, name: 'Новый менеджер', username: 'new_manager', created_at: iso(today) }];
-    let seq = { o: Math.max(0, ...db.orders.map((o) => o.id)), p: 1 };
+    db.expenses = [{ id: 1, spent_at: iso(today), amount: 450000, category: 'Материалы', method: 'cash', comment: 'бумага' },
+      { id: 2, spent_at: iso(today), amount: 300000, category: 'Реклама', method: 'card', comment: 'Instagram' }];
+    let seq = { o: Math.max(0, ...db.orders.map((o) => o.id)), p: 1, e: 3 };
     db.payments.forEach((p) => (p.id = seq.p++));
     const user = role === 'owner'
       ? { telegram_id: 1, name: 'Руководитель (демо)', role: 'owner', code: null }
@@ -120,6 +123,19 @@
         return A.me();
       },
       sheets_sync: (p) => ({ count: db.orders.filter((o) => o.order_date === p.date).length }),
+      finance: (p) => {
+        const inRange = (d) => (!p.from || d >= p.from) && (!p.to || d <= p.to);
+        return { payments: db.payments.filter((x) => inRange(x.paid_at)),
+          expenses: db.expenses.filter((x) => inRange(x.spent_at)).sort((a, b) => b.spent_at.localeCompare(a.spent_at) || b.id - a.id) };
+      },
+      expense_save: (p) => {
+        if (!(Number(p.amount) > 0)) throw new Error('Сумма расхода должна быть больше нуля');
+        const row = { spent_at: p.spent_at || iso(new Date()), amount: Number(p.amount), category: p.category, method: p.method || 'cash', comment: p.comment || null };
+        const cur = db.expenses.find((x) => x.id === Number(p.id));
+        cur ? Object.assign(cur, row) : db.expenses.push({ id: seq.e++, ...row });
+        return { ok: true };
+      },
+      expense_delete: (p) => { db.expenses = db.expenses.filter((x) => x.id !== Number(p.id)); return { ok: true }; },
       dict_add: (p) => {
         const list = demoDicts[p.kind];
         const key = p.kind === 'designers' ? 'code' : 'name';

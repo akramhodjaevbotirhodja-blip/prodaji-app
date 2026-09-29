@@ -49,7 +49,7 @@
     catch (e) { if (!quiet) { toast(e.message); haptic('error'); } throw e; }
   }
   // списки заказов держим минуту: фильтры и поиск переключаются без запроса к серверу
-  const READS = ['me', 'orders', 'order'];
+  const READS = ['me', 'orders', 'order', 'finance'];
   const cache = new Map();
   function cached(action, params) {
     const k = action + JSON.stringify(params), hit = cache.get(k);
@@ -196,8 +196,9 @@
     async dashboard() {
       const p = S.dash;
       const r = p.period === 'custom' ? { from: p.from, to: p.to } : range(p.period);
-      const [list, debts] = await Promise.all([cached('orders', r), cached('orders', { debt: true })]);
-      return dashboardHtml(list.filter((o) => o.stage !== 'Отменён'), debts, r);
+      const [list, debts, fin] = await Promise.all([cached('orders', r), cached('orders', { debt: true }),
+        isOwner() ? cached('finance', r) : null]);
+      return dashboardHtml(list.filter((o) => o.stage !== 'Отменён'), debts, r, fin);
     },
 
     async more() {
@@ -224,7 +225,8 @@
         <div class="card"><div class="hint" style="margin-bottom:8px">Новые заказы и оплаты попадают в файл дня автоматически (папка «Продажи по дням» в Google Drive). Здесь можно заново выгрузить все заказы за дату.</div>
           <div style="display:flex;gap:6px"><input type="date" id="syncDate" value="${today()}"><button class="btn sm" data-act="sheetsync">Выгрузить</button></div></div>
         <h2>Справочники</h2>
-        ${[['products', 'Продукты', 'name'], ['designers', 'Дизайнеры', 'code'], ['sources', 'Источники', 'name']].map(([k, t, f]) => `
+        ${[['products', 'Продукты', 'name'], ['designers', 'Дизайнеры', 'code'], ['sources', 'Источники', 'name'],
+          ['expense_categories', 'Виды расходов', 'name']].map(([k, t, f]) => `
           <div class="card"><b>${t}</b><div class="hint" style="margin:4px 0 8px">${S.dicts[k].map((x) => esc(x[f])).join(' · ')}</div>
           <div style="display:flex;gap:6px"><input placeholder="Новое значение" data-dict="${k}"><button class="btn sm" data-act="dict" data-kind="${k}">Добавить</button></div></div>`).join('')}`;
       return html;
@@ -259,7 +261,24 @@
       <div class="bar"><i style="width:${(r.sum / max) * 100}%"></i></div></div>`).join('') || '<div class="center hint">Нет данных</div>'}</div>`;
   };
 
-  function dashboardHtml(list, debts, r) {
+  // Деньги за период: поступило (оплаты по дате оплаты) − расходы = прибыль. Только руководителю.
+  function financeHtml(fin) {
+    if (!fin) return '';
+    const inc = fin.payments.reduce((s, x) => s + Number(x.amount), 0);
+    const out = fin.expenses.reduce((s, x) => s + Number(x.amount), 0);
+    const profit = inc - out;
+    const byCat = group(fin.expenses.map((e) => ({ ...e, paid: 0, rest: 0 })), 'category', (e) => Number(e.amount));
+    return `<h2>Деньги за период</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="k">Поступило</div><div class="v green">${money(inc)}</div><div class="hint">${fin.payments.length} оплат</div></div>
+        <div class="kpi tap" data-act="expenses"><div class="k">Расходы →</div><div class="v red">${money(out)}</div><div class="hint">${fin.expenses.length} записей</div></div>
+        <div class="kpi wide"><div class="k">Прибыль (поступило − расходы)</div><div class="v ${profit < 0 ? 'red' : 'green'}">${money(profit)} сум</div></div>
+      </div>
+      ${byCat.length ? bars(byCat, (g) => `${money(g.sum)} · ${g.n}`) : ''}
+      <button class="btn ghost" data-act="expense">+ Добавить расход</button>`;
+  }
+
+  function dashboardHtml(list, debts, r, fin) {
     const p = S.dash;
     const sum = list.reduce((s, o) => s + o.total, 0), paid = list.reduce((s, o) => s + o.paid, 0);
     const priced = list.filter((o) => o.total > 0).length; // заказы из amoCRM без суммы не портят средний чек
@@ -287,6 +306,7 @@
           <div class="hint" style="margin-top:4px"><span class="green">получено ${money(paid)}</span> · <span class="red">не получено ${money(sum - paid)}</span> · собрано ${sum ? Math.round((paid / sum) * 100) : 0}%</div></div>
         <div class="kpi wide alert tap" data-act="tab" data-v="debtors"><div class="k">Долг всего, за всё время →</div><div class="v">${money(debtAll)} сум</div><div class="hint">${debts.length} заказов</div></div>
       </div>
+      ${financeHtml(fin)}
       ${isOwner() ? `<h2>Менеджеры</h2><div class="list">${mgr.map((g) => `<div class="row" style="display:block">
           <div style="display:flex;justify-content:space-between"><b>${esc(g.k)}</b><span class="amt"><b>${money(g.sum)}</b> · ${g.n} зак.</span></div>
           <div class="bar"><i class="paid" style="width:${g.sum ? (g.paid / g.sum) * 100 : 0}%"></i><i class="rest" style="width:${g.sum ? (g.rest / g.sum) * 100 : 0}%"></i></div>
@@ -313,6 +333,38 @@
 
   // ---------- вложенные экраны ----------
   const VIEWS = {
+    // все расходы за период дашборда
+    async expenses() {
+      const r = S.dash.period === 'custom' ? { from: S.dash.from, to: S.dash.to } : range(S.dash.period);
+      const { expenses } = await cached('finance', r);
+      S.expenses = expenses; // для открытия расхода на правку
+      const total = expenses.reduce((s, e) => s + Number(e.amount), 0);
+      const label = S.dash.period === 'custom' ? `${fmtDate(r.from)} — ${fmtDate(r.to)}` : periods[S.dash.period];
+      return `<h1>Расходы</h1>
+        <div class="hint" style="margin:0 6px 8px">${esc(label)} · ${expenses.length} записей · ${money(total)} сум</div>
+        <div class="list">${expenses.map((e) => `<div class="row tap" data-act="expense" data-id="${e.id}">
+          <div class="grow"><div class="title">${esc(e.category)}</div>
+          <div class="sub">${fmtDate(e.spent_at)} · ${METHODS[e.method] || ''}${e.comment ? ' · ' + esc(e.comment) : ''}</div></div>
+          <div class="amt red"><b>${money(e.amount)}</b></div></div>`).join('') || '<div class="center hint">Расходов нет</div>'}</div>
+        <button class="fab" data-act="expense" aria-label="Новый расход">+</button>`;
+    },
+
+    // новый расход или правка
+    async expense(v) {
+      const e = v.data || { spent_at: today(), method: 'cash' };
+      const cats = S.dicts.expense_categories.map((c) => c.name);
+      return `<h1>${e.id ? 'Расход' : 'Новый расход'}</h1>
+        <div class="card">
+          <label style="margin-top:0">Вид расхода</label><select id="exCat">${opts(cats, e.category, 'Выберите')}</select>
+          <div class="grid2"><div><label>Сумма</label><input type="number" inputmode="numeric" id="exAmount" value="${e.amount ?? ''}" placeholder="0"></div>
+          <div><label>Дата</label><input type="date" id="exDate" value="${e.spent_at}"></div></div>
+          <label>Чем платили</label>${segHtml('exmethod', e.method)}
+          <label>Комментарий</label><input id="exComment" value="${esc(e.comment)}" placeholder="например: бумага, 5 пачек" autocomplete="off">
+        </div>
+        <button class="btn" data-act="exsave">Сохранить расход</button>
+        ${e.id ? '<button class="btn danger" data-act="exdel">Удалить расход</button>' : ''}`;
+    },
+
     async order(v) {
       const o = (v.data = await call('order', { id: v.id }, { quiet: true }));
       const info = [['Дата', fmtDate(o.order_date)], ['Менеджер', o.manager_code], ['Дизайнер', o.designer_code], ['Источник', o.source],
@@ -438,6 +490,26 @@
     period: (el) => { S.filters.period = el.dataset.v; render(); },
     status: (el) => { S.filters.status = el.dataset.v; render(); },
     fstage: (el) => { S.filters.stage = el.dataset.v; render(); },
+    expenses: () => push({ type: 'expenses' }),
+    expense: (el) => {
+      const e = el.dataset.id && (S.expenses || []).find((x) => String(x.id) === el.dataset.id);
+      push({ type: 'expense', data: e ? { ...e } : null });
+    },
+    async exsave(el) {
+      const v = S.stack[S.stack.length - 1];
+      const row = { id: v.data?.id, category: document.getElementById('exCat').value, amount: Number(document.getElementById('exAmount').value),
+        spent_at: document.getElementById('exDate').value, method: segVal('exmethod'), comment: document.getElementById('exComment').value };
+      if (!row.category) return toast('Выберите вид расхода');
+      if (!(row.amount > 0)) return toast('Введите сумму');
+      el.disabled = true;
+      try { await call('expense_save', row); haptic('success'); toast('Расход сохранён'); pop(); }
+      catch { el.disabled = false; }
+    },
+    async exdel() {
+      const v = S.stack[S.stack.length - 1];
+      if (!(await ask(`Удалить расход ${money(v.data.amount)} сум (${v.data.category})?`))) return;
+      await call('expense_delete', { id: v.data.id }); haptic('success'); toast('Расход удалён'); pop();
+    },
     dperiod: (el) => {
       S.dash.period = el.dataset.v;
       if (el.dataset.v === 'custom' && !S.dash.from) Object.assign(S.dash, range('month'));
