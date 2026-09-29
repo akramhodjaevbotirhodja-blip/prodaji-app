@@ -464,8 +464,8 @@
     return `${type === 'Область' ? `<label>Область</label><select name="delivery_region">${opts(REGIONS, o.delivery_region, 'Выберите область')}</select>` : ''}
       <label>${type === 'Область' ? 'Чем отправляем' : 'Кто доставит'}</label>
       <select name="delivery_service">${opts(SERVICES[type], o.delivery_service)}</select>
-      <label>${type === 'Область' ? 'Город, адрес или отделение почты' : 'Адрес'}</label>
-      <input name="delivery" value="${esc(o.delivery)}" placeholder="${type === 'Область' ? 'г. Самарканд, отделение BTS №3' : 'Юнусабад, 4-квартал, дом 12'}">
+      <label>${type === 'Область' ? 'Адрес или отделение почты (без области)' : 'Адрес'}</label>
+      <input name="delivery" value="${esc(o.delivery)}" placeholder="${type === 'Область' ? 'Чорсу бозор' : 'Юнусабад, 4-квартал, дом 12'}">
       ${type === 'Область' ? `<label>Трек-номер (можно позже)</label><input name="tracking" value="${esc(o.tracking)}">` : ''}`;
   }
   const deliveryText = (o) => o.delivery_type === 'Область'
