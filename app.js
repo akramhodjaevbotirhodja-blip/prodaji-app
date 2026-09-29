@@ -724,6 +724,21 @@
     const el = e.target.closest('[data-act]');
     if (el && ACTS[el.dataset.act]) { e.preventDefault(); ACTS[el.dataset.act](el); }
   });
+  // Enter в поле формы — переход к следующему полю (на телефоне кнопка клавиатуры «Далее»), а не «ничего»
+  const fields = () => [...$app.querySelectorAll('input:not([type=hidden]):not([type=file]):not([type=search]):not([disabled]), select, textarea')]
+    .filter((x) => x.offsetParent !== null);
+  $app.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if (e.key !== 'Enter' || e.isComposing || !t.matches('input, select') || t.type === 'search') return;
+    e.preventDefault();
+    const list = fields(), next = list[list.indexOf(t) + 1];
+    if (next) { next.focus(); if (next.select && next.tagName === 'INPUT' && next.type !== 'date' && next.type !== 'time') next.select(); }
+    else t.blur(); // последнее поле — просто убираем клавиатуру
+  });
+  // подсказка клавиатуре телефона: на Enter показать «Далее»
+  new MutationObserver(() => $app.querySelectorAll('input:not([enterkeyhint])').forEach((x) => x.setAttribute('enterkeyhint', x.type === 'search' ? 'search' : 'next')))
+    .observe($app, { childList: true, subtree: true });
+
   // ряды чипов на компьютере: колесо мыши и перетаскивание листают их вбок (на телефоне — обычный свайп)
   $app.addEventListener('wheel', (e) => {
     const row = e.target.closest('.chips:not(.wrap)');
