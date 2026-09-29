@@ -17,6 +17,7 @@
   const money = (n) => Math.round(Number(n) || 0).toLocaleString('ru-RU').replace(/,/g, ' ');
   const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
   const today = () => iso(new Date());
+  const nowTime = () => new Date().toTimeString().slice(0, 5); // «14:35» — по умолчанию время оплаты
   const addDays = (s, n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return iso(d); };
   const fmtDate = (s) => (s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '');
   const daysAgo = (s) => Math.round((new Date(today()) - new Date(s)) / 864e5);
@@ -330,14 +331,15 @@
           <div class="total-line"><span class="green">Оплачено</span><span class="green">${money(o.paid)}</span></div>
           <div class="total-line"><span class="${o.rest > 0 ? 'red' : 'green'}"><b>Остаток</b></span><span class="${o.rest > 0 ? 'red' : 'green'}"><b>${money(o.rest)}</b></span></div></div>
         <h2>Оплаты</h2>
-        <div class="list">${o.payments.map((p) => `<div class="row"><div class="grow">${METHODS[p.method]}<div class="sub">${fmtDate(p.paid_at)}</div></div>
+        <div class="list">${o.payments.map((p) => `<div class="row"><div class="grow">${METHODS[p.method]}<div class="sub">${fmtDate(p.paid_at)}${p.paid_time ? ' · ' + String(p.paid_time).slice(0, 5) : ''}</div></div>
           ${p.receipt_url ? `<a class="receipt" href="${esc(p.receipt_url)}" data-act="receipt" title="Чек"><img src="${esc(p.receipt_url)}" alt="Чек"></a>`
             : `<label class="btn sm ghost receipt-add">📎 Чек<input type="file" accept="image/*" hidden data-receipt-for="${p.id}"></label>`}
           <div class="amt">${money(p.amount)}</div>${isOwner() ? `<button class="btn sm danger" data-act="paydel" data-id="${p.id}">✕</button>` : ''}</div>`).join('') || '<div class="row hint">Оплат пока нет</div>'}</div>
         ${o.rest > 0 && o.stage !== 'Отменён' ? `<div class="card" style="margin-top:8px"><b>Добавить оплату</b>
           ${segHtml('method', 'click')}
-          <div class="grid2" style="margin-top:8px"><div><input type="number" inputmode="numeric" placeholder="Сумма" value="${o.rest}" id="payAmount"></div>
-          <div><input type="date" value="${today()}" id="payDate"></div></div>
+          <label>Сумма</label><input type="number" inputmode="numeric" placeholder="Сумма" value="${o.rest}" id="payAmount">
+          <div class="grid2"><div><label>Дата оплаты</label><input type="date" value="${today()}" id="payDate"></div>
+          <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="payTime"></div></div>
           ${receiptPicker()}
           <button class="btn" data-act="payadd">Сохранить оплату</button></div>` : ''}
         <button class="btn ghost" data-act="edit">Редактировать заказ</button>
@@ -368,7 +370,8 @@
           <div id="items">${(o.items || []).map(itemHtml).join('')}</div>
           <div class="total-line big" style="margin-top:8px"><span>Итого</span><span id="formTotal">0</span></div></div>
         ${o.payments?.length ? '' : `<h2>Предоплата</h2><div class="card">${segHtml('method', 'click')}
-          <input type="number" inputmode="numeric" placeholder="Сумма предоплаты (можно пусто)" id="firstPay" style="margin-top:8px">
+          <div class="grid2"><div><label>Сумма</label><input type="number" inputmode="numeric" placeholder="Можно пусто" id="firstPay"></div>
+          <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="firstPayTime"></div></div>
           ${receiptPicker()}</div>`}
         <h2>Доставка</h2>
         <div class="card"><div class="seg" data-seg="dtype">${Object.entries(DELIVERY).map(([k, t]) =>
@@ -478,7 +481,8 @@
       if (!order.client && !order.company && !order.phone) return toast('Укажите клиента, компанию или телефон');
       if (isOwner() && !order.manager_code) return toast('Выберите менеджера');
       const fp = document.getElementById('firstPay');
-      const payment = fp && Number(fp.value) > 0 ? { method: segVal('method'), amount: Number(fp.value), paid_at: order.order_date, receipt: S.receipt } : null;
+      const payment = fp && Number(fp.value) > 0 ? { method: segVal('method'), amount: Number(fp.value), paid_at: order.order_date,
+        paid_time: document.getElementById('firstPayTime').value, receipt: S.receipt } : null;
       if (S.receipt && !payment) return toast('Чек прикреплён — укажите сумму предоплаты');
       el.disabled = true;
       try {
@@ -494,7 +498,7 @@
       if (!(amount > 0)) return toast('Введите сумму');
       if (amount > v.data.rest && !(await ask(`Сумма больше остатка (${money(v.data.rest)}). Всё равно сохранить?`))) return;
       el.disabled = true;
-      try { await call('payment_add', { order_id: v.id, method: segVal('method'), amount, paid_at: document.getElementById('payDate').value, receipt: S.receipt }); haptic('success'); toast('Оплата добавлена'); render(); }
+      try { await call('payment_add', { order_id: v.id, method: segVal('method'), amount, paid_at: document.getElementById('payDate').value, paid_time: document.getElementById('payTime').value, receipt: S.receipt }); haptic('success'); toast('Оплата добавлена'); render(); }
       catch { el.disabled = false; }
     },
     async stage(el) {

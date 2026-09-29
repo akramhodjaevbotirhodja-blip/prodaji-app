@@ -99,7 +99,7 @@
       payment_add: (p) => {
         find(p.order_id);
         if (!(Number(p.amount) > 0)) throw new Error('Сумма оплаты должна быть больше нуля');
-        db.payments.push({ id: seq.p++, order_id: Number(p.order_id), method: p.method, amount: Number(p.amount), paid_at: p.paid_at || iso(new Date()),
+        db.payments.push({ id: seq.p++, order_id: Number(p.order_id), method: p.method, amount: Number(p.amount), paid_at: p.paid_at || iso(new Date()), paid_time: p.paid_time || null,
           receipt_url: p.receipt || null }); // в демо чек хранится прямо картинкой
         return A.order({ id: p.order_id });
       },
