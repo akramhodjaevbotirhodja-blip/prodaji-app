@@ -1,0 +1,636 @@
+(function () {
+  const tg = window.Telegram && window.Telegram.WebApp;
+  const $app = document.getElementById('app');
+  const $tabs = document.getElementById('tabs');
+  const METHODS = { click: 'Click', card: 'Карта', cash: 'Наличные', transfer: 'Перечисление' };
+  const DELIVERY = { 'Самовывоз': 'Самовывоз', 'Ташкент': 'По Ташкенту', 'Область': 'По области' };
+  const REGIONS = ['Андижанская', 'Бухарская', 'Джизакская', 'Кашкадарьинская', 'Навоийская', 'Наманганская', 'Самаркандская',
+    'Сурхандарьинская', 'Сырдарьинская', 'Ташкентская обл.', 'Ферганская', 'Хорезмская', 'Каракалпакстан'];
+  const SERVICES = {
+    'Ташкент': ['Наш курьер', 'Яндекс Доставка', 'Такси', 'Другое'],
+    'Область': ['BTS', 'EMU', 'Узпочта', 'Такси / попутка', 'Другое'],
+  };
+  const S = { user: null, dicts: null, requests: [], tab: 'orders', stack: [], filters: { period: 'month', status: 'all', stage: 'all', q: '' }, dash: { period: 'month', from: '', to: '' } };
+
+  // ---------- утилиты ----------
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const money = (n) => Math.round(Number(n) || 0).toLocaleString('ru-RU').replace(/,/g, ' ');
+  const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+  const today = () => iso(new Date());
+  const addDays = (s, n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return iso(d); };
+  const fmtDate = (s) => (s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '');
+  const daysAgo = (s) => Math.round((new Date(today()) - new Date(s)) / 864e5);
+  const isOwner = () => S.user && S.user.role === 'owner';
+  // window.confirm в Telegram Desktop не показывается и сразу возвращает false, поэтому спрашиваем через Telegram
+  const ask = (msg) => new Promise((res) => (tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')
+    ? tg.showConfirm(msg, res) : res(window.confirm(msg))));
+  const haptic = (t) => tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred(t);
+  const periods = { today: 'Сегодня', week: '7 дней', month: 'Месяц', prev: 'Прошлый месяц', all: 'Всё время' };
+  function range(p) {
+    const t = today();
+    if (p === 'today') return { from: t, to: t };
+    if (p === 'week') return { from: addDays(t, -6), to: t };
+    if (p === 'month') return { from: t.slice(0, 8) + '01', to: t };
+    if (p === 'prev') { const end = addDays(t.slice(0, 8) + '01', -1); return { from: end.slice(0, 8) + '01', to: end }; }
+    return {};
+  }
+  function toast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg; el.hidden = false;
+    clearTimeout(toast.t); toast.t = setTimeout(() => (el.hidden = true), 2600);
+  }
+  async function call(action, params, { quiet } = {}) {
+    try {
+      const res = await window.api(action, params);
+      if (!READS.includes(action)) cache.clear(); // что-то изменили — списки перечитаем
+      return res;
+    }
+    catch (e) { if (!quiet) { toast(e.message); haptic('error'); } throw e; }
+  }
+  // списки заказов держим минуту: фильтры и поиск переключаются без запроса к серверу
+  const READS = ['me', 'orders', 'order'];
+  const cache = new Map();
+  function cached(action, params) {
+    const k = action + JSON.stringify(params), hit = cache.get(k);
+    if (hit && Date.now() - hit.t < 60e3) return hit.p;
+    const p = call(action, params, { quiet: true }).catch((e) => { cache.delete(k); throw e; });
+    cache.set(k, { t: Date.now(), p });
+    return p;
+  }
+  const payBadge = (o) => {
+    if (o.stage === 'Отменён') return '<span class="badge b-grey">Отменён</span>';
+    if (!(o.total > 0)) return '<span class="badge b-grey">Без суммы</span>'; // заказ из amoCRM, продукты ещё не внесены
+    if (o.rest <= 0) return '<span class="badge b-green">Оплачено</span>';
+    if (o.paid > 0) return `<span class="badge b-amber">−${money(o.rest)}</span>`;
+    return `<span class="badge b-red">−${money(o.rest)}</span>`;
+  };
+  const AMO = 'https://gano2010.amocrm.ru/leads/detail/';
+  const isInstagram = (source) => /^instagram/i.test(source || '');
+  // «@nik» или «nik» → ссылка на профиль; готовую ссылку оставляем как есть
+  const igUrl = (s) => (/^https?:\/\//i.test(s) ? s : 'https://instagram.com/' + String(s).replace(/^@/, '').trim());
+
+  // Скриншот чека: уменьшаем на телефоне до 1600 px и JPEG, чтобы не гонять мегабайты
+  const receiptPicker = () => `<label class="btn sm ghost receipt-pick">📎 Скриншот чека
+      <input type="file" accept="image/*" hidden data-receipt-new></label><img id="receiptPreview" class="receipt-preview" hidden alt="Чек">`;
+  function readReceipt(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(img.src);
+        resolve(c.toDataURL('image/jpeg', 0.8));
+      };
+      img.onerror = () => reject(new Error('Не удалось открыть картинку'));
+      img.src = URL.createObjectURL(file);
+    });
+  }
+  // этапы: семь рабочих по порядку + «Отменён» отдельно
+  const CANCEL = 'Отменён';
+  const flow = () => S.dicts.stages.filter((s) => s !== CANCEL);
+  const stageNo = (o) => flow().indexOf(o.stage) + 1;
+  const pips = (o) => {
+    const n = stageNo(o);
+    return n ? `<div class="sub"><span class="pips">${flow().map((_, i) => `<i class="${i < n ? 'f' : ''}"></i>`).join('')}</span>${esc(o.stage)}</div>` : '';
+  };
+  // семь подписей в ширину телефона: переносим только в этих местах, а не посреди слога
+  const HYPHENS = { Потребность: 'Потреб&shy;ность', выявлена: 'выяв&shy;лена', Производство: 'Произ&shy;водство',
+    Оплачено: 'Опла&shy;чено', Доставка: 'Дос&shy;тавка' };
+  const stepLabel = (s) => esc(s).replace(/[А-яЁё]+/g, (w) => HYPHENS[w] || w);
+
+  function stepper(o) {
+    if (o.stage === CANCEL) return `<div class="card"><span class="badge b-grey">Заказ отменён</span>
+      <button class="btn ghost" data-act="stage" data-v="${esc(flow()[0])}">Вернуть в работу</button></div>`;
+    const n = stageNo(o);
+    return `<div class="card"><label style="margin-top:0">Этап заказа · ${n} из ${flow().length}. Нажмите на нужный этап</label>
+      <div class="steps">${flow().map((s, i) => `<button class="step ${i < n - 1 ? 'done' : i === n - 1 ? 'on' : ''}" data-act="stage" data-v="${esc(s)}">
+        <i>${i < n - 1 ? '✓' : i + 1}</i><span>${stepLabel(s)}</span></button>`).join('')}</div>
+      <button class="btn sm danger" data-act="stage" data-v="${CANCEL}">Отменить заказ</button></div>`;
+  }
+  const products = (o) => (o.items || []).map((i) => i.product + (i.qty > 1 ? ' ×' + i.qty : '')).join(', ');
+  const opts = (list, val, empty = '—') =>
+    `<option value="">${empty}</option>` + list.map((v) => `<option ${v === val ? 'selected' : ''} value="${esc(v)}">${esc(v)}</option>`).join('');
+  const chips = (name, items, cur) =>
+    `<div class="chips">${Object.entries(items).map(([k, v]) => `<button class="chip ${k === cur ? 'on' : ''}" data-act="${name}" data-v="${k}">${v}</button>`).join('')}</div>`;
+
+  // ответ me / staff_save / access_decide: справочники и заявки на доступ (число — на вкладке «Ещё»)
+  function setMe(res) {
+    S.dicts = res.dicts; S.requests = res.requests || [];
+    const b = $tabs.querySelector('[data-tab=more]');
+    let n = b.querySelector('.count');
+    if (!n) { n = document.createElement('span'); n.className = 'count'; b.appendChild(n); }
+    n.textContent = S.requests.length || ''; n.hidden = !S.requests.length;
+  }
+
+  // ---------- навигация ----------
+  function push(view) { S.stack.push(view); render(); window.scrollTo(0, 0); }
+  function pop() { S.stack.pop(); render(); }
+  function setTab(t) { S.tab = t; S.stack = []; render(); window.scrollTo(0, 0); }
+  $tabs.addEventListener('click', (e) => { const b = e.target.closest('[data-tab]'); if (b) setTab(b.dataset.tab); });
+  if (tg) tg.BackButton.onClick(pop);
+
+  async function render() {
+    S.receipt = null; // выбранный скриншот чека живёт только на текущем экране
+    const view = S.stack[S.stack.length - 1];
+    $tabs.hidden = !!view && view.type === 'form';
+    [...$tabs.children].forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
+    if (tg) S.stack.length ? tg.BackButton.show() : tg.BackButton.hide();
+    const token = (render.token = {});
+    let html;
+    try {
+      html = view ? await VIEWS[view.type](view) : await TABS[S.tab]();
+    } catch (e) {
+      html = `<div class="center"><p>${esc(e.message)}</p><button class="btn ghost" data-act="reload">Повторить</button></div>`;
+    }
+    if (token !== render.token) return;
+    $app.innerHTML = demoBar() + html;
+    if (view && view.after) view.after();
+  }
+
+  // ---------- экраны-вкладки ----------
+  const TABS = {
+    async orders() {
+      const f = S.filters;
+      const list = await cached('orders', range(f.period));
+      const q = f.q.trim().toLowerCase();
+      const rows = list.filter((o) =>
+        STATUS_FILTERS[f.status](o) && (f.stage === 'all' || o.stage === f.stage) &&
+        (!q || [o.client, o.company, o.phone, String(o.id)].some((v) => String(v || '').toLowerCase().includes(q))));
+      const sum = rows.filter((o) => o.stage !== 'Отменён').reduce((s, o) => s + o.total, 0);
+      return `<h1>Заказы</h1>
+        ${chips('period', periods, f.period)}
+        ${chips('status', { all: 'Все', debt: 'С долгом', work: 'В работе', ship: 'На отправку' }, f.status)}
+        ${chips('fstage', { all: 'Все этапы', ...Object.fromEntries(S.dicts.stages.map((s) => {
+          const n = list.filter((o) => o.stage === s).length, no = stageNo({ stage: s });
+          return [s, `${no ? no + '. ' : ''}${esc(s)} · ${n}`];
+        })) }, f.stage)}
+        <input class="search" type="search" placeholder="Поиск: клиент, компания, телефон, №" value="${esc(f.q)}" data-input="q">
+        <div class="hint" style="margin:0 6px 8px">${rows.length} заказов · ${money(sum)} сум</div>
+        <div class="list">${rows.map(orderRow).join('') || '<div class="center hint">Заказов нет</div>'}</div>
+        <button class="fab" data-act="new" aria-label="Новый заказ">+</button>`;
+    },
+
+    async debtors() {
+      const list = [...(await cached('orders', { debt: true }))].sort((a, b) => a.order_date.localeCompare(b.order_date) || b.rest - a.rest);
+      const total = list.reduce((s, o) => s + o.rest, 0);
+      const old = list.filter((o) => daysAgo(o.order_date) > 7);
+      return `<h1>Должники</h1>
+        <div class="kpis">
+          <div class="kpi alert"><div class="k">Всего должны</div><div class="v">${money(total)}</div></div>
+          <div class="kpi"><div class="k">Заказов с долгом</div><div class="v">${list.length}</div><div class="hint">${old.length} дольше 7 дней</div></div>
+        </div>
+        <h2>По старшинству долга</h2>
+        <div class="list">${list.map((o) => {
+          const d = daysAgo(o.order_date);
+          return `<div class="row tap" data-act="open" data-id="${o.id}">
+            <div class="grow"><div class="title">${esc(o.company || o.client || o.phone || 'Без имени')}</div>
+            <div class="sub">№${o.id} · ${esc(o.manager_code || '—')} · ${esc(o.phone || '')}</div></div>
+            <div class="amt"><div class="red"><b>${money(o.rest)}</b></div>
+            <span class="badge ${d > 7 ? 'b-red' : 'b-grey'}">${d === 0 ? 'сегодня' : d + ' дн.'}</span></div></div>`;
+        }).join('') || '<div class="center hint">Должников нет 🎉</div>'}</div>`;
+    },
+
+    async dashboard() {
+      const p = S.dash;
+      const r = p.period === 'custom' ? { from: p.from, to: p.to } : range(p.period);
+      const [list, debts] = await Promise.all([cached('orders', r), cached('orders', { debt: true })]);
+      return dashboardHtml(list.filter((o) => o.stage !== 'Отменён'), debts, r);
+    },
+
+    async more() {
+      const u = S.user;
+      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div></div>`;
+      if (!isOwner()) return html;
+      const free = S.dicts.staff.filter((s) => s.active && !s.telegram_id).map((s) => s.code);
+      if (S.requests.length) html += `<h2>Заявки на доступ</h2>${S.requests.map((r) => `
+        <div class="card" data-req="${r.telegram_id}">
+          <b>${esc(r.name || 'Без имени')}</b>${r.username ? ` <span class="hint">@${esc(r.username)}</span>` : ''}
+          <div class="hint">Telegram ID ${r.telegram_id} · ${fmtDate(String(r.created_at).slice(0, 10))}</div>
+          <div class="grid2" style="margin-top:8px"><select data-f="code">${opts(free, '', 'Код сотрудника')}</select>
+            <input data-f="newcode" placeholder="или новый код" autocomplete="off"></div>
+          <div class="grid2"><button class="btn" data-act="reqok">Одобрить</button><button class="btn ghost" data-act="reqno">Отклонить</button></div>
+        </div>`).join('')}`;
+      html += `<h2>Сотрудники</h2><div class="list">${S.dicts.staff.map((s) => `
+        <div class="row tap" data-act="staff" data-code="${esc(s.code)}">
+          <div class="grow"><div class="title">${esc(s.code)} · ${esc(s.name || '')}</div>
+          <div class="sub">${s.telegram_id ? 'Telegram ID ' + s.telegram_id : 'не привязан к Telegram'}${s.active ? '' : ' · отключён'}</div></div>
+          <span class="badge ${s.telegram_id && s.active ? 'b-green' : 'b-grey'}">${s.role === 'owner' ? 'руковод.' : 'менеджер'}</span></div>`).join('')}</div>
+        <button class="btn ghost" data-act="staff" data-code="">+ Добавить сотрудника</button>
+        <p class="hint" style="margin:8px 6px">Сотрудник открывает бота, видит свой Telegram ID и присылает его вам. Вы вписываете ID здесь.</p>
+        <h2>Google-таблица дня</h2>
+        <div class="card"><div class="hint" style="margin-bottom:8px">Новые заказы и оплаты попадают в файл дня автоматически (папка «Продажи по дням» в Google Drive). Здесь можно заново выгрузить все заказы за дату.</div>
+          <div style="display:flex;gap:6px"><input type="date" id="syncDate" value="${today()}"><button class="btn sm" data-act="sheetsync">Выгрузить</button></div></div>
+        <h2>Справочники</h2>
+        ${[['products', 'Продукты', 'name'], ['designers', 'Дизайнеры', 'code'], ['sources', 'Источники', 'name']].map(([k, t, f]) => `
+          <div class="card"><b>${t}</b><div class="hint" style="margin:4px 0 8px">${S.dicts[k].map((x) => esc(x[f])).join(' · ')}</div>
+          <div style="display:flex;gap:6px"><input placeholder="Новое значение" data-dict="${k}"><button class="btn sm" data-act="dict" data-kind="${k}">Добавить</button></div></div>`).join('')}`;
+      return html;
+    },
+  };
+
+  const open = (o) => o.stage !== flow()[flow().length - 1] && o.stage !== CANCEL;
+  const STATUS_FILTERS = {
+    all: () => true,
+    debt: (o) => o.rest > 0 && o.stage !== 'Отменён',
+    work: open,
+    ship: (o) => open(o) && (o.delivery_type === 'Ташкент' || o.delivery_type === 'Область'),
+  };
+
+  const orderRow = (o) => `<div class="row tap" data-act="open" data-id="${o.id}">
+    <div class="grow"><div class="title">${esc(o.company || o.client || o.phone || 'Без имени')}</div>
+    <div class="sub">№${o.id} · ${fmtDate(o.order_date)} · ${esc(o.manager_code || '—')} · ${esc(products(o))}</div>
+    ${deliveryText(o) ? `<div class="sub">${esc(deliveryText(o))}${o.tracking ? ' · трек ' + esc(o.tracking) : ''}</div>` : ''}
+    ${pips(o)}</div>
+    <div class="amt"><div><b>${money(o.total)}</b></div>${payBadge(o)}</div></div>`;
+
+  function group(list, key, val = (o) => o.total) {
+    const m = new Map();
+    list.forEach((o) => { const k = (typeof key === 'function' ? key(o) : o[key]) || 'Не указан'; const g = m.get(k) || { k, n: 0, sum: 0, paid: 0, rest: 0 };
+      g.n++; g.sum += val(o); g.paid += o.paid; g.rest += o.rest; m.set(k, g); });
+    return [...m.values()].sort((a, b) => b.sum - a.sum);
+  }
+  const bars = (rows, fmt) => {
+    const max = Math.max(1, ...rows.map((r) => r.sum));
+    return `<div class="list">${rows.map((r) => `<div class="row" style="display:block">
+      <div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(r.k)}</span><span class="amt">${fmt(r)}</span></div>
+      <div class="bar"><i style="width:${(r.sum / max) * 100}%"></i></div></div>`).join('') || '<div class="center hint">Нет данных</div>'}</div>`;
+  };
+
+  function dashboardHtml(list, debts, r) {
+    const p = S.dash;
+    const sum = list.reduce((s, o) => s + o.total, 0), paid = list.reduce((s, o) => s + o.paid, 0);
+    const priced = list.filter((o) => o.total > 0).length; // заказы из amoCRM без суммы не портят средний чек
+    const debtAll = debts.reduce((s, o) => s + o.rest, 0);
+    const items = list.flatMap((o) => o.items.map((i) => ({ ...i, order_id: o.id })));
+    const prod = new Map();
+    items.forEach((i) => { const g = prod.get(i.product) || { k: i.product, orders: new Set(), qty: 0, sum: 0 }; g.orders.add(i.order_id); g.qty += Number(i.qty); g.sum += Number(i.amount); prod.set(i.product, g); });
+    const pays = Object.entries(METHODS).map(([m, t]) => ({ k: t, sum: list.reduce((s, o) => s + (o['paid_' + m] || 0), 0) }));
+    const payTotal = pays.reduce((s, x) => s + x.sum, 0) || 1;
+    // по дням
+    const byDay = new Map(); list.forEach((o) => byDay.set(o.order_date, (byDay.get(o.order_date) || 0) + o.total));
+    const from = r.from || [...byDay.keys()].sort()[0] || today(), to = r.to || today();
+    const days = []; for (let d = from; d <= to && days.length < 62; d = addDays(d, 1)) days.push([d, byDay.get(d) || 0]);
+    const dmax = Math.max(1, ...days.map((d) => d[1]));
+    const mgr = group(list, 'manager_code');
+
+    return `<h1>Дашборд</h1>
+      ${chips('dperiod', { ...periods, custom: 'Период…' }, p.period)}
+      ${p.period === 'custom' ? `<div class="grid2" style="margin-bottom:10px"><input type="date" value="${p.from}" data-input="dfrom"><input type="date" value="${p.to}" data-input="dto"></div>` : ''}
+      <div class="kpis">
+        <div class="kpi"><div class="k">Заказов</div><div class="v">${list.length}</div></div>
+        <div class="kpi"><div class="k">Средний чек</div><div class="v">${money(priced ? sum / priced : 0)}</div></div>
+        <div class="kpi wide"><div class="k">Сумма заказов</div><div class="v">${money(sum)} сум</div>
+          <div class="bar"><i class="paid" style="width:${sum ? (paid / sum) * 100 : 0}%"></i><i class="rest" style="width:${sum ? ((sum - paid) / sum) * 100 : 0}%"></i></div>
+          <div class="hint" style="margin-top:4px"><span class="green">получено ${money(paid)}</span> · <span class="red">не получено ${money(sum - paid)}</span> · собрано ${sum ? Math.round((paid / sum) * 100) : 0}%</div></div>
+        <div class="kpi wide alert tap" data-act="tab" data-v="debtors"><div class="k">Долг всего, за всё время →</div><div class="v">${money(debtAll)} сум</div><div class="hint">${debts.length} заказов</div></div>
+      </div>
+      ${isOwner() ? `<h2>Менеджеры</h2><div class="list">${mgr.map((g) => `<div class="row" style="display:block">
+          <div style="display:flex;justify-content:space-between"><b>${esc(g.k)}</b><span class="amt"><b>${money(g.sum)}</b> · ${g.n} зак.</span></div>
+          <div class="bar"><i class="paid" style="width:${g.sum ? (g.paid / g.sum) * 100 : 0}%"></i><i class="rest" style="width:${g.sum ? (g.rest / g.sum) * 100 : 0}%"></i></div>
+          <div class="hint" style="margin-top:3px">собрано ${g.sum ? Math.round((g.paid / g.sum) * 100) : 0}% · <span class="red">не получено ${money(g.rest)}</span></div></div>`).join('') || '<div class="center hint">Нет данных</div>'}</div>` : ''}
+      <h2>Этапы заказов</h2>${bars(flow().map((s) => { const g = list.filter((o) => o.stage === s); return { k: `${stageNo({ stage: s })}. ${s}`, sum: g.length, total: g.reduce((a, o) => a + o.total, 0) }; }),
+        (g) => `${g.sum} зак. · ${money(g.total)}`)}
+      <h2>Продажи по дням</h2>
+      <div class="card"><div class="days">${days.map(([d, v]) => `<div title="${fmtDate(d)}: ${money(v)}" style="height:${(v / dmax) * 100}%"></div>`).join('')}</div>
+        <div class="days-labels"><span>${fmtDate(from).slice(0, 5)}</span><span>${fmtDate(to).slice(0, 5)}</span></div></div>
+      <h2>Продукты</h2>
+      <div class="kpis" style="margin-bottom:8px">
+        <div class="kpi"><div class="k">Продуктов в заказе, в среднем</div><div class="v">${list.length ? (items.length / list.length).toFixed(1).replace('.', ',') : 0}</div></div>
+        <div class="kpi"><div class="k">Заказов с 2+ продуктами</div><div class="v">${list.filter((o) => o.items.length > 1).length}</div></div>
+      </div>${bars([...prod.values()].sort((a, b) => b.sum - a.sum), (g) => `${money(g.sum)} · ${g.orders.size} зак. · ${g.qty} шт.`)}
+      <h2>Источники клиентов</h2>${bars(group(list, 'source'), (g) => `${money(g.sum)} · ${g.n} зак.`)}
+      <h2>Дизайнеры</h2>${bars(group(list, 'designer_code'), (g) => `${money(g.sum)} · ${g.n} зак.`)}
+      <h2>Доставка</h2>${bars(group(list, (o) => DELIVERY[o.delivery_type] || 'Не указано'), (g) => `${g.n} зак. · ${money(g.sum)}`)}
+      ${(() => { const reg = list.filter((o) => o.delivery_type === 'Область');
+        return reg.length ? `<h2>Отправки по областям</h2>${bars(group(reg, 'delivery_region'), (g) => `${g.n} зак. · ${money(g.sum)}`)}
+          <h2>Службы доставки</h2>${bars(group(list.filter((o) => o.delivery_service), 'delivery_service'), (g) => `${g.n} зак.`)}` : ''; })()}
+      <h2>Способы оплаты</h2>${bars(pays.filter((x) => x.sum), (g) => `${money(g.sum)} · ${Math.round((g.sum / payTotal) * 100)}%`)}
+      <p class="hint" style="margin:10px 6px">Отменённые заказы не учитываются. Период считается по дате заказа.</p>`;
+  }
+
+  // ---------- вложенные экраны ----------
+  const VIEWS = {
+    async order(v) {
+      const o = (v.data = await call('order', { id: v.id }, { quiet: true }));
+      const info = [['Дата', fmtDate(o.order_date)], ['Менеджер', o.manager_code], ['Дизайнер', o.designer_code], ['Источник', o.source],
+        ['Клиент', o.client], ['Телефон', o.phone ? `<a href="tel:${esc(o.phone.replace(/\s/g, ''))}">${esc(o.phone)}</a>` : ''],
+        ['Доставка', [DELIVERY[o.delivery_type], o.delivery_region, o.delivery_service].filter(Boolean).join(' · ')],
+        ['Адрес', o.delivery], ['Трек-номер', o.tracking], ['Комментарий', o.comment],
+        ['Instagram', o.instagram ? `<a href="${esc(igUrl(o.instagram))}" data-act="link">${esc(o.instagram)}</a>` : ''],
+        ['amoCRM', o.amo_lead_id ? `<a href="${AMO + o.amo_lead_id}" data-act="link">сделка ${o.amo_lead_id}</a>` : '']]
+        .filter(([, x]) => x).map(([k, x]) => `<div class="row"><span class="hint" style="width:96px;flex:none">${k}</span><span class="grow">${['Телефон', 'Instagram', 'amoCRM'].includes(k) ? x : esc(x)}</span></div>`).join('');
+      return `<h1>№${o.id} · ${esc(o.company || o.client || 'Заказ')}</h1>
+        ${stepper(o)}
+        <div class="list">${info}</div>
+        <h2>Продукты</h2>
+        <div class="card">${o.items.map((i) => `<div class="total-line"><span>${esc(i.product)} ×${i.qty}</span><span>${money(i.amount)}</span></div>`).join('')}
+          <div class="total-line big"><span>Итого</span><span>${money(o.total)} сум</span></div>
+          <div class="total-line"><span class="green">Оплачено</span><span class="green">${money(o.paid)}</span></div>
+          <div class="total-line"><span class="${o.rest > 0 ? 'red' : 'green'}"><b>Остаток</b></span><span class="${o.rest > 0 ? 'red' : 'green'}"><b>${money(o.rest)}</b></span></div></div>
+        <h2>Оплаты</h2>
+        <div class="list">${o.payments.map((p) => `<div class="row"><div class="grow">${METHODS[p.method]}<div class="sub">${fmtDate(p.paid_at)}</div></div>
+          ${p.receipt_url ? `<a class="receipt" href="${esc(p.receipt_url)}" data-act="receipt" title="Чек"><img src="${esc(p.receipt_url)}" alt="Чек"></a>`
+            : `<label class="btn sm ghost receipt-add">📎 Чек<input type="file" accept="image/*" hidden data-receipt-for="${p.id}"></label>`}
+          <div class="amt">${money(p.amount)}</div>${isOwner() ? `<button class="btn sm danger" data-act="paydel" data-id="${p.id}">✕</button>` : ''}</div>`).join('') || '<div class="row hint">Оплат пока нет</div>'}</div>
+        ${o.rest > 0 && o.stage !== 'Отменён' ? `<div class="card" style="margin-top:8px"><b>Добавить оплату</b>
+          ${segHtml('method', 'click')}
+          <div class="grid2" style="margin-top:8px"><div><input type="number" inputmode="numeric" placeholder="Сумма" value="${o.rest}" id="payAmount"></div>
+          <div><input type="date" value="${today()}" id="payDate"></div></div>
+          ${receiptPicker()}
+          <button class="btn" data-act="payadd">Сохранить оплату</button></div>` : ''}
+        <button class="btn ghost" data-act="edit">Редактировать заказ</button>
+        ${isOwner() ? '<button class="btn danger" data-act="delete">Удалить заказ</button>' : ''}`;
+    },
+
+    async form(v) {
+      const o = v.data;
+      const names = (k, f = 'name') => S.dicts[k].filter((x) => x.active !== false).map((x) => x[f]);
+      const staff = S.dicts.staff.filter((s) => s.active).map((s) => s.code);
+      v.after = () => { recalcForm(); };
+      return `<h1>${o.id ? 'Заказ №' + o.id : 'Новый заказ'}</h1>
+        <div class="card">
+          <div class="grid2"><div><label>Дата</label><input type="date" name="order_date" value="${o.order_date || today()}"></div>
+          <div><label>Менеджер</label>${isOwner() ? `<select name="manager_code">${opts(staff, o.manager_code || S.user.code)}</select>` : `<input value="${esc(S.user.code)}" disabled>`}</div></div>
+          <div class="grid2"><div><label>Дизайнер</label><select name="designer_code">${opts(names('designers', 'code'), o.designer_code)}</select></div>
+          <div><label>Источник</label><select name="source" data-input="source">${opts(names('sources'), o.source)}</select></div></div>
+          <div id="igField" ${isInstagram(o.source) ? '' : 'hidden'}><label>Ссылка на Instagram</label>
+            <input name="instagram" value="${esc(o.instagram)}" placeholder="https://instagram.com/… или @ник" autocomplete="off"></div>
+          <label>Клиент (имя / ник)</label><input name="client" value="${esc(o.client)}" autocomplete="off">
+          <label>Компания / текст печати</label><input name="company" value="${esc(o.company)}" autocomplete="off">
+          <label>Телефон</label><input name="phone" type="tel" value="${esc(o.phone)}" placeholder="90 123 45 67">
+          <label>Сделка в amoCRM (ссылка)</label><input name="amo_lead" value="${o.amo_lead_id ? esc(AMO + o.amo_lead_id) : ''}" placeholder="Вставьте ссылку, если по телефону не найдётся" autocomplete="off">
+        </div>
+        <h2>Продукты</h2>
+        <div class="card"><div class="hint">Отметьте все продукты заказа (можно несколько), затем укажите количество и сумму каждого</div>
+          <div class="chips wrap" id="pick">${pickHtml(o.items || [])}</div>
+          <div id="items">${(o.items || []).map(itemHtml).join('')}</div>
+          <div class="total-line big" style="margin-top:8px"><span>Итого</span><span id="formTotal">0</span></div></div>
+        ${o.payments?.length ? '' : `<h2>Предоплата</h2><div class="card">${segHtml('method', 'click')}
+          <input type="number" inputmode="numeric" placeholder="Сумма предоплаты (можно пусто)" id="firstPay" style="margin-top:8px">
+          ${receiptPicker()}</div>`}
+        <h2>Доставка</h2>
+        <div class="card"><div class="seg" data-seg="dtype">${Object.entries(DELIVERY).map(([k, t]) =>
+          `<button data-act="seg" data-v="${k}" class="${k === (o.delivery_type || 'Самовывоз') ? 'on' : ''}">${t}</button>`).join('')}</div>
+          <div id="dFields">${deliveryFields(o.delivery_type || 'Самовывоз', o)}</div></div>
+        <div class="card" style="margin-top:8px">
+          <label style="margin-top:0">Этап</label><select name="stage">${opts(S.dicts.stages, o.stage || flow()[0]).replace('<option value="">—</option>', '')}</select>
+          <label>Комментарий</label><textarea name="comment">${esc(o.comment)}</textarea>
+        </div>
+        <button class="btn" data-act="save">Сохранить заказ</button>`;
+    },
+
+    async staff(v) {
+      const s = v.data || { code: '', name: '', telegram_id: '', role: 'manager', active: true };
+      return `<h1>${s.code ? 'Сотрудник ' + esc(s.code) : 'Новый сотрудник'}</h1>
+        <div class="card">
+          <label style="margin-top:0">Код (как в заказах: MY, SH…)</label><input id="sCode" value="${esc(s.code)}" ${s.code ? 'disabled' : ''}>
+          <label>Имя</label><input id="sName" value="${esc(s.name)}">
+          <label>Telegram ID</label><input id="sTg" inputmode="numeric" value="${esc(s.telegram_id || '')}" placeholder="например 123456789">
+          <label>Роль</label><select id="sRole">${['manager', 'owner'].map((r) => `<option value="${r}" ${s.role === r ? 'selected' : ''}>${r === 'owner' ? 'Руководитель (видит всё)' : 'Менеджер (видит свои заказы)'}</option>`).join('')}</select>
+          <label><input type="checkbox" id="sActive" ${s.active ? 'checked' : ''} style="width:auto;min-height:0"> Активен</label>
+        </div>
+        <button class="btn" data-act="staffsave">Сохранить</button>`;
+    },
+  };
+
+  const segHtml = (name, cur) => `<div class="seg" data-seg="${name}">${Object.entries(METHODS).map(([k, t]) => `<button data-act="seg" data-v="${k}" class="${k === cur ? 'on' : ''}">${t}</button>`).join('')}</div>`;
+  const pickHtml = (items) => {
+    const chosen = new Set(items.map((i) => i.product));
+    return S.dicts.products.filter((p) => p.active !== false).map((p) =>
+      `<button class="chip ${chosen.has(p.name) ? 'on' : ''}" data-act="pick" data-v="${esc(p.name)}">${chosen.has(p.name) ? '✓ ' : ''}${esc(p.name)}</button>`).join('');
+  };
+  const itemHtml = (i) => `<div class="item" data-product="${esc(i.product)}"><div class="iname">${esc(i.product)}</div>
+    <input type="number" inputmode="decimal" data-f="qty" value="${i.qty ?? 1}" min="0" placeholder="шт."><input type="number" inputmode="numeric" data-f="amount" value="${i.amount ?? ''}" placeholder="Сумма, сум">
+    <button data-act="delitem" aria-label="Убрать">×</button></div>`;
+  function deliveryFields(type, o) {
+    if (type === 'Самовывоз') return '<p class="hint" style="margin:10px 2px 0">Клиент заберёт заказ сам.</p>';
+    return `${type === 'Область' ? `<label>Область</label><select name="delivery_region">${opts(REGIONS, o.delivery_region, 'Выберите область')}</select>` : ''}
+      <label>${type === 'Область' ? 'Чем отправляем' : 'Кто доставит'}</label>
+      <select name="delivery_service">${opts(SERVICES[type], o.delivery_service)}</select>
+      <label>${type === 'Область' ? 'Город, адрес или отделение почты' : 'Адрес'}</label>
+      <input name="delivery" value="${esc(o.delivery)}" placeholder="${type === 'Область' ? 'г. Самарканд, отделение BTS №3' : 'Юнусабад, 4-квартал, дом 12'}">
+      ${type === 'Область' ? `<label>Трек-номер (можно позже)</label><input name="tracking" value="${esc(o.tracking)}">` : ''}`;
+  }
+  const deliveryText = (o) => o.delivery_type === 'Область'
+    ? ['📦', o.delivery_region, o.delivery_service].filter(Boolean).join(' ')
+    : o.delivery_type === 'Ташкент' ? '🚚 Ташкент' + (o.delivery_service ? ' · ' + o.delivery_service : '') : '';
+  const itemRows = () => [...document.querySelectorAll('#items .item')];
+  function refreshPick() {
+    const pick = document.getElementById('pick');
+    if (pick) pick.innerHTML = pickHtml(itemRows().map((r) => ({ product: r.dataset.product })));
+    recalcForm();
+  }
+  function recalcForm() {
+    const el = document.getElementById('formTotal'); if (!el) return;
+    el.textContent = money([...document.querySelectorAll('#items [data-f=amount]')].reduce((s, x) => s + (Number(x.value) || 0), 0)) + ' сум';
+  }
+  const segVal = (name) => { const b = document.querySelector(`[data-seg=${name}] .on`); return b && b.dataset.v; };
+
+  // ---------- действия ----------
+  const ACTS = {
+    reload: () => { cache.clear(); render(); },
+    tab: (el) => setTab(el.dataset.v),
+    period: (el) => { S.filters.period = el.dataset.v; render(); },
+    status: (el) => { S.filters.status = el.dataset.v; render(); },
+    fstage: (el) => { S.filters.stage = el.dataset.v; render(); },
+    dperiod: (el) => {
+      S.dash.period = el.dataset.v;
+      if (el.dataset.v === 'custom' && !S.dash.from) Object.assign(S.dash, range('month'));
+      render();
+    },
+    open: (el) => push({ type: 'order', id: Number(el.dataset.id) }),
+    new: () => push({ type: 'form', data: { items: [] } }),
+    edit: () => { const o = S.stack[S.stack.length - 1].data; push({ type: 'form', data: JSON.parse(JSON.stringify(o)) }); },
+    pick: (el) => {
+      const row = itemRows().find((r) => r.dataset.product === el.dataset.v);
+      if (row) row.remove();
+      else {
+        document.getElementById('items').insertAdjacentHTML('beforeend', itemHtml({ product: el.dataset.v }));
+        itemRows().pop().querySelector('[data-f=amount]').focus();
+      }
+      refreshPick();
+    },
+    delitem: (el) => { el.closest('.item').remove(); refreshPick(); },
+    seg: (el) => {
+      el.parentNode.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el));
+      if (el.parentNode.dataset.seg === 'dtype') {
+        const keep = {};
+        ['delivery', 'delivery_region', 'delivery_service', 'tracking'].forEach((n) => { const x = $app.querySelector(`[name=${n}]`); if (x) keep[n] = x.value; });
+        document.getElementById('dFields').innerHTML = deliveryFields(el.dataset.v, keep);
+      }
+    },
+    async save(el) {
+      const v = S.stack[S.stack.length - 1];
+      const val = (n) => { const x = $app.querySelector(`[name=${n}]`); return x ? x.value : undefined; };
+      const order = { id: v.data.id, order_date: val('order_date'), manager_code: val('manager_code'), designer_code: val('designer_code'),
+        source: val('source'), client: val('client'), company: val('company'), phone: val('phone'), stage: val('stage'),
+        delivery: val('delivery'), comment: val('comment'), delivery_type: segVal('dtype'),
+        delivery_region: val('delivery_region'), delivery_service: val('delivery_service'), tracking: val('tracking'),
+        amo_lead: val('amo_lead'), instagram: isInstagram(val('source')) ? val('instagram') : '' };
+      if (order.delivery_type === 'Область' && !order.delivery_region) return toast('Выберите область доставки');
+      if (order.delivery_type === 'Область' && !order.delivery_service) return toast('Выберите, чем отправляем (BTS, EMU…)');
+      const items = itemRows().map((r) => ({
+        product: r.dataset.product, qty: r.querySelector('[data-f=qty]').value, amount: r.querySelector('[data-f=amount]').value }));
+      if (!items.length) return toast('Отметьте хотя бы один продукт');
+      if (items.some((i) => !(Number(i.amount) > 0)) && !(await ask('У некоторых продуктов не указана сумма. Сохранить так?'))) return;
+      if (!order.client && !order.company && !order.phone) return toast('Укажите клиента, компанию или телефон');
+      if (isOwner() && !order.manager_code) return toast('Выберите менеджера');
+      const fp = document.getElementById('firstPay');
+      const payment = fp && Number(fp.value) > 0 ? { method: segVal('method'), amount: Number(fp.value), paid_at: order.order_date, receipt: S.receipt } : null;
+      if (S.receipt && !payment) return toast('Чек прикреплён — укажите сумму предоплаты');
+      el.disabled = true;
+      try {
+        const saved = await call('order_save', { order, items, payment });
+        haptic('success'); toast('Заказ сохранён');
+        S.stack = S.stack.filter((x) => x.type !== 'form' && !(x.type === 'order' && x.id === saved.id));
+        push({ type: 'order', id: saved.id });
+      } catch { el.disabled = false; }
+    },
+    async payadd(el) {
+      const v = S.stack[S.stack.length - 1];
+      const amount = Number(document.getElementById('payAmount').value);
+      if (!(amount > 0)) return toast('Введите сумму');
+      if (amount > v.data.rest && !(await ask(`Сумма больше остатка (${money(v.data.rest)}). Всё равно сохранить?`))) return;
+      el.disabled = true;
+      try { await call('payment_add', { order_id: v.id, method: segVal('method'), amount, paid_at: document.getElementById('payDate').value, receipt: S.receipt }); haptic('success'); toast('Оплата добавлена'); render(); }
+      catch { el.disabled = false; }
+    },
+    async stage(el) {
+      const v = S.stack[S.stack.length - 1], s = el.dataset.v;
+      if (s === v.data.stage) return;
+      if (s === CANCEL && !(await ask(`Отменить заказ №${v.id}?`))) return;
+      await call('order_stage', { id: v.id, stage: s }); haptic('success'); toast('Этап: ' + s); render();
+    },
+    async paydel(el) {
+      if (!(await ask('Удалить эту оплату?'))) return;
+      await call('payment_delete', { id: Number(el.dataset.id) }); render();
+    },
+    async delete() {
+      const v = S.stack[S.stack.length - 1];
+      if (!(await ask(`Удалить заказ №${v.id} полностью? Это нельзя отменить.`))) return;
+      await call('order_delete', { id: v.id }); toast('Заказ удалён'); pop();
+    },
+    staff: (el) => push({ type: 'staff', data: S.dicts.staff.find((s) => s.code === el.dataset.code) }),
+    async staffsave() {
+      const code = document.getElementById('sCode').value.trim();
+      if (!code) return toast('Введите код');
+      const res = await call('staff_save', { code, name: document.getElementById('sName').value, telegram_id: document.getElementById('sTg').value.trim() || null,
+        role: document.getElementById('sRole').value, active: document.getElementById('sActive').checked });
+      setMe(res); toast('Сохранено'); pop();
+    },
+    async dict(el) {
+      const inp = $app.querySelector(`[data-dict=${el.dataset.kind}]`);
+      if (!inp.value.trim()) return;
+      const res = await call('dict_add', { kind: el.dataset.kind, name: inp.value.trim() }); setMe(res); toast('Добавлено'); render();
+    },
+    async sheetsync(el) {
+      const date = document.getElementById('syncDate').value;
+      if (!date) return toast('Выберите дату');
+      el.disabled = true; toast('Выгружаю… это может занять минуту');
+      try { const r = await call('sheets_sync', { date }); haptic('success'); toast(`Готово: ${r.count} заказов за ${fmtDate(date)}`); }
+      finally { el.disabled = false; }
+    },
+    async reqok(el) {
+      const card = el.closest('[data-req]');
+      const code = (card.querySelector('[data-f=newcode]').value.trim() || card.querySelector('[data-f=code]').value).toUpperCase();
+      if (!code) return toast('Выберите код сотрудника или впишите новый');
+      el.disabled = true;
+      try {
+        setMe(await call('access_decide', { telegram_id: Number(card.dataset.req), approve: true, code }));
+        haptic('success'); toast(`Доступ открыт: ${code}`); render();
+      } catch { el.disabled = false; }
+    },
+    async reqno(el) {
+      const card = el.closest('[data-req]');
+      if (!(await ask('Отклонить заявку?'))) return;
+      setMe(await call('access_decide', { telegram_id: Number(card.dataset.req), approve: false })); toast('Заявка отклонена'); render();
+    },
+    link: (el) => (tg && tg.openLink ? tg.openLink(el.href) : window.open(el.href, '_blank')),
+    receipt: (el) => ACTS.link(el),
+    copyid: (el) => { navigator.clipboard && navigator.clipboard.writeText(el.dataset.v); toast('ID скопирован'); },
+  };
+  $app.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-act]');
+    if (el && ACTS[el.dataset.act]) { e.preventDefault(); ACTS[el.dataset.act](el); }
+  });
+  // ряды чипов на компьютере: колесо мыши и перетаскивание листают их вбок (на телефоне — обычный свайп)
+  $app.addEventListener('wheel', (e) => {
+    const row = e.target.closest('.chips:not(.wrap)');
+    if (row && row.scrollWidth > row.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) { row.scrollLeft += e.deltaY; e.preventDefault(); }
+  }, { passive: false });
+  let drag = null;
+  $app.addEventListener('pointerdown', (e) => {
+    const row = e.pointerType === 'mouse' && e.target.closest('.chips:not(.wrap)');
+    if (row) drag = { row, x: e.clientX, left: row.scrollLeft, moved: false };
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (Math.abs(dx) > 5) drag.moved = true;
+    if (drag.moved) drag.row.scrollLeft = drag.left - dx;
+  });
+  window.addEventListener('pointerup', () => { setTimeout(() => { drag = null; }); });
+  // после перетаскивания не нажимаем чип, на котором отпустили мышь
+  $app.addEventListener('click', (e) => { if (drag?.moved) { e.stopPropagation(); e.preventDefault(); } }, true);
+  $app.addEventListener('input', (e) => {
+    const k = e.target.dataset.input;
+    if (e.target.closest('#items')) recalcForm();
+    if (k === 'q') { S.filters.q = e.target.value; clearTimeout(ACTS.qt); ACTS.qt = setTimeout(() => { const pos = e.target.selectionStart; render().then(() => { const s = $app.querySelector('[data-input=q]'); if (s) { s.focus(); s.setSelectionRange(pos, pos); } }); }, 350); }
+  });
+  $app.addEventListener('change', async (e) => {
+    const k = e.target.dataset.input;
+    if (k === 'dfrom' || k === 'dto') { S.dash[k === 'dfrom' ? 'from' : 'to'] = e.target.value; render(); }
+    if (e.target.dataset.demo !== undefined) { location.search = '?demo=' + e.target.value; }
+    if (k === 'source') document.getElementById('igField').hidden = !isInstagram(e.target.value);
+    const file = e.target.files && e.target.files[0];
+    if (file && e.target.dataset.receiptNew !== undefined) {
+      try {
+        S.receipt = await readReceipt(file);
+        const img = document.getElementById('receiptPreview'); img.src = S.receipt; img.hidden = false;
+      } catch (err) { toast(err.message); }
+    }
+    if (file && e.target.dataset.receiptFor) {
+      let receipt;
+      try { receipt = await readReceipt(file); } catch (err) { return toast(err.message); }
+      try {
+        await call('payment_receipt', { id: Number(e.target.dataset.receiptFor), receipt }); haptic('success'); toast('Чек сохранён'); render();
+      } catch { /* call уже показал ошибку */ }
+    }
+  });
+
+  function demoBar() {
+    if (!window.IS_DEMO) return '';
+    const cur = new URLSearchParams(location.search).get('demo') || 'owner';
+    return `<div class="demo-bar">Демо-режим, данные не сохраняются. Смотреть как:
+      <select data-demo>${['owner', 'MY', 'SH', 'D', 'V'].map((r) => `<option ${r === cur ? 'selected' : ''} value="${r}">${r === 'owner' ? 'руководитель' : 'менеджер ' + r}</option>`).join('')}</select></div>`;
+  }
+
+  // ---------- старт ----------
+  async function start() {
+    if (tg) { tg.ready(); tg.expand(); if (tg.initData) document.documentElement.classList.add('tg'); }
+    if (!window.IS_DEMO && !(tg && tg.initData)) {
+      $app.innerHTML = '<div class="center"><h1>Откройте через Telegram</h1><p class="hint">Это приложение работает внутри бота. Для просмотра без Telegram добавьте к адресу <b>?demo</b>.</p></div>';
+      return;
+    }
+    try {
+      const me = await window.api('me');
+      S.user = me.user; setMe(me); $tabs.hidden = false;
+      if (new URLSearchParams(location.search).get('tab') === 'more') S.tab = 'more'; // кнопка из уведомления о заявке
+      render();
+    } catch (e) {
+      if (e.error === 'not_registered' || e.message === 'not_registered') {
+        // rejected — заявку отклонили; approved — доступ был, но сотрудника отключили
+        $app.innerHTML = e.request && e.request !== 'pending'
+          ? `<div class="center"><h1>Нет доступа</h1><p class="hint">Доступ закрыт руководителем. Если это ошибка, напишите ему.</p></div>`
+          : `<div class="center"><h1>Заявка отправлена</h1><p>Руководитель получил уведомление и откроет вам доступ.</p>
+          <p class="hint">Ваш Telegram ID: <b>${esc(e.telegram_id)}</b></p>
+          <p class="hint">Когда доступ откроют, бот пришлёт сообщение. Тогда закройте и снова откройте приложение.</p></div>`;
+      } else {
+        $app.innerHTML = `<div class="center"><h1>Не удалось подключиться</h1><p class="hint">${esc(e.message)}</p><button class="btn" onclick="location.reload()">Повторить</button></div>`;
+      }
+    }
+  }
+  start();
+})();
