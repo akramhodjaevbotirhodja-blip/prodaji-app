@@ -1,5 +1,6 @@
 (function () {
   const tg = window.Telegram && window.Telegram.WebApp;
+  const VERSION = (String(document.currentScript && document.currentScript.src).match(/v=(\w+)/) || [])[1] || '—';
   const $app = document.getElementById('app');
   const $tabs = document.getElementById('tabs');
   const METHODS = { click: 'Click', card: 'Карта', cash: 'Наличные', transfer: 'Перечисление' };
@@ -71,8 +72,11 @@
   const igUrl = (s) => (/^https?:\/\//i.test(s) ? s : 'https://instagram.com/' + String(s).replace(/^@/, '').trim());
 
   // Скриншот чека: уменьшаем на телефоне до 1600 px и JPEG, чтобы не гонять мегабайты
-  const receiptPicker = () => `<label class="btn sm ghost receipt-pick">📎 Скриншот чека
-      <input type="file" accept="image/*" hidden data-receipt-new></label><img id="receiptPreview" class="receipt-preview" hidden alt="Чек">`;
+  // Ctrl+V в любом месте экрана тоже вставляет чек сюда (см. обработчик paste)
+  const receiptPicker = () => `<div class="drop on" data-receipt-zone style="margin:10px 0 0">
+      <div class="drop-head"><b>🧾 Чек</b><label class="btn sm ghost">📎 Файл<input type="file" accept="image/*" hidden data-receipt-new></label></div>
+      <img id="receiptPreview" alt="Чек" hidden>
+      <div class="drop-empty hint" id="receiptEmpty">Скопируйте скриншот и нажмите Ctrl+V</div></div>`;
   // дизайн сохраняем крупнее и чётче (max = 2400, quality = 0.9)
   function readReceipt(file, max = 1600, quality = 0.8) {
     return new Promise((resolve, reject) => {
@@ -269,7 +273,8 @@
 
     async more() {
       const u = S.user;
-      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div></div>`;
+      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
+        <div class="hint">Версия приложения ${esc(VERSION)}</div></div>`;
       if (!isOwner()) return html;
       const free = S.dicts.staff.filter((s) => s.active && !s.telegram_id).map((s) => s.code);
       if (S.requests.length) html += `<h2>Заявки на доступ</h2>${S.requests.map((r) => `
@@ -868,8 +873,7 @@
     const file = e.target.files && e.target.files[0];
     if (file && e.target.dataset.receiptNew !== undefined) {
       try {
-        S.receipt = await readReceipt(file);
-        const img = document.getElementById('receiptPreview'); img.src = S.receipt; img.hidden = false;
+        showReceipt(await readReceipt(file));
       } catch (err) { toast(err.message); }
     }
     if (file && e.target.dataset.paste) { await setPaste(e.target.dataset.paste, file); e.target.value = ''; }
@@ -903,6 +907,13 @@
     const box = document.getElementById('payBox');
     if (box) box.hidden = !P.receipt;
   }
+  // чек к новой оплате (форма заказа и карточка заказа)
+  function showReceipt(data) {
+    S.receipt = data;
+    const img = document.getElementById('receiptPreview'); img.src = data; img.hidden = false;
+    document.getElementById('receiptEmpty').hidden = true;
+    haptic('success'); toast('Чек вставлен');
+  }
   async function setPaste(k, file) {
     try { S.paste[k] = k === 'design' ? await readReceipt(file, 2400, 0.9) : await readReceipt(file); }
     catch (err) { return toast(err.message); }
@@ -917,24 +928,24 @@
     if (!file) return; // обычный текст вставляется как всегда
     if (isPasteTab()) { e.preventDefault(); return setPaste(S.paste.target, file); }
     // в карточке заказа и в форме Ctrl+V прикрепляет чек к новой оплате
-    const prev = document.getElementById('receiptPreview');
-    if (prev) {
+    if (document.getElementById('receiptPreview')) {
       e.preventDefault();
-      try { S.receipt = await readReceipt(file); prev.src = S.receipt; prev.hidden = false; toast('Чек вставлен'); }
-      catch (err) { toast(err.message); }
-    }
+      try { showReceipt(await readReceipt(file)); } catch (err) { toast(err.message); }
+    } else toast('Здесь некуда вставить картинку — откройте раздел «📎 Чеки»');
   });
   $app.addEventListener('dragover', (e) => {
-    const z = isPasteTab() && e.target.closest('[data-zone]');
+    const z = e.target.closest(isPasteTab() ? '[data-zone]' : '[data-receipt-zone]');
     if (z) { e.preventDefault(); z.classList.add('over'); }
   });
-  $app.addEventListener('dragleave', (e) => { const z = e.target.closest('[data-zone]'); if (z) z.classList.remove('over'); });
-  $app.addEventListener('drop', (e) => {
-    const z = isPasteTab() && e.target.closest('[data-zone]');
+  $app.addEventListener('dragleave', (e) => { const z = e.target.closest('[data-zone], [data-receipt-zone]'); if (z) z.classList.remove('over'); });
+  $app.addEventListener('drop', async (e) => {
+    const z = e.target.closest(isPasteTab() ? '[data-zone]' : '[data-receipt-zone]');
     if (!z) return;
     e.preventDefault(); z.classList.remove('over');
     const file = imageFile(e.dataTransfer);
-    if (file) { S.paste.target = z.dataset.zone; setPaste(z.dataset.zone, file); } else toast('Перетащите картинку');
+    if (!file) return toast('Перетащите картинку');
+    if (z.dataset.zone) { S.paste.target = z.dataset.zone; setPaste(z.dataset.zone, file); }
+    else try { showReceipt(await readReceipt(file)); } catch (err) { toast(err.message); }
   });
 
   function demoBar() {
