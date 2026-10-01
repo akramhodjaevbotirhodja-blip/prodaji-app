@@ -73,10 +73,17 @@
 
   // Скриншот чека: уменьшаем на телефоне до 1600 px и JPEG, чтобы не гонять мегабайты
   // Ctrl+V в любом месте экрана тоже вставляет чек сюда (см. обработчик paste)
-  const receiptPicker = () => `<div class="drop on" data-receipt-zone style="margin:10px 0 0">
+  // Поле выделено рамкой — туда и пойдёт Ctrl+V; нажатие на другое поле переключает.
+  const receiptPicker = () => `<div class="drop" data-pz="receipt" style="margin:10px 0 0">
       <div class="drop-head"><b>🧾 Чек</b><label class="btn sm ghost">📎 Файл<input type="file" accept="image/*" hidden data-receipt-new></label></div>
       <img id="receiptPreview" alt="Чек" hidden>
       <div class="drop-empty hint" id="receiptEmpty">Скопируйте скриншот и нажмите Ctrl+V</div></div>`;
+  // orderId — карточка заказа: дизайн сохраняется сразу; без него (форма) — после сохранения заказа
+  const designPicker = (orderId) => `<div class="drop" data-pz="design" style="margin:10px 0 0">
+      <div class="drop-head"><b>🎨 Дизайн</b><label class="btn sm ghost">📎 Файл<input type="file" accept="image/*" hidden
+        ${orderId ? `data-design-for="${orderId}"` : 'data-design-new'}></label></div>
+      <img id="designPreview" alt="Дизайн" hidden>
+      <div class="drop-empty hint" id="designEmpty">Нажмите сюда, затем Ctrl+V — дизайн, который утвердил клиент</div></div>`;
   // дизайн сохраняем крупнее и чётче (max = 2400, quality = 0.9)
   function readReceipt(file, max = 1600, quality = 0.8) {
     return new Promise((resolve, reject) => {
@@ -141,8 +148,9 @@
   if (tg) tg.BackButton.onClick(pop);
 
   async function render() {
-    S.receipt = null; // выбранный скриншот чека живёт только на текущем экране
+    S.receipt = null; S.design = null; // выбранные картинки живут только на текущем экране
     const view = S.stack[S.stack.length - 1];
+    S.pz = 'receipt'; // Ctrl+V идёт в чек; если поля чека нет (заказ оплачен) — paintPz переключит на дизайн
     $tabs.hidden = !!view && view.type === 'form';
     [...$tabs.children].forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
     if (tg) S.stack.length ? tg.BackButton.show() : tg.BackButton.hide();
@@ -155,6 +163,7 @@
     }
     if (token !== render.token) return;
     $app.innerHTML = demoBar() + html;
+    paintPz();
     if (view && view.after) view.after();
   }
 
@@ -535,7 +544,7 @@
         <div class="card">${(o.designs || []).length ? `<div class="designs">${o.designs.map((d) => `<div class="design">
             <a href="${esc(d.url)}" data-act="receipt"><img src="${esc(d.url)}" alt="Дизайн"></a>
             <button data-act="designdel" data-id="${d.id}" aria-label="Удалить">✕</button></div>`).join('')}</div>` : '<div class="hint">Дизайн ещё не прикреплён</div>'}
-          <label class="btn sm ghost receipt-pick">🎨 Добавить дизайн<input type="file" accept="image/*" hidden data-design-for="${o.id}"></label></div>
+          ${designPicker(o.id)}</div>
         <button class="btn ghost" data-act="edit">Редактировать заказ</button>
         <button class="btn ghost" data-act="merge">Объединить с другим заказом</button>
         ${isOwner() ? '<button class="btn danger" data-act="delete">Удалить заказ</button>' : ''}`;
@@ -568,6 +577,7 @@
           <div class="grid2"><div><label>Сумма</label><input type="number" inputmode="numeric" placeholder="Можно пусто" id="firstPay"></div>
           <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="firstPayTime"></div></div>
           ${receiptPicker()}</div>`}
+        <h2>Утверждённый дизайн</h2><div class="card">${designPicker()}</div>
         <h2>Доставка</h2>
         <div class="card"><div class="seg" data-seg="dtype">${Object.entries(DELIVERY).map(([k, t]) =>
           `<button data-act="seg" data-v="${k}" class="${k === (o.delivery_type || 'Самовывоз') ? 'on' : ''}">${t}</button>`).join('')}</div>
@@ -709,9 +719,12 @@
         paid_time: document.getElementById('firstPayTime').value, receipt: S.receipt } : null;
       if (S.receipt && !payment) return toast('Чек прикреплён — укажите сумму предоплаты');
       el.disabled = true;
+      const design = S.design;
       try {
         const saved = await call('order_save', { order, items, payment });
-        haptic('success'); toast('Заказ сохранён');
+        // заказ уже сохранён: если дизайн не загрузится, его можно добавить в карточке
+        const ok = !design || await call('design_add', { order_id: saved.id, image: design }, { quiet: true }).then(() => true, () => false);
+        haptic('success'); toast(ok ? 'Заказ сохранён' : 'Заказ сохранён, но дизайн не загрузился — добавьте его в карточке');
         S.stack = S.stack.filter((x) => x.type !== 'form' && !(x.type === 'order' && x.id === saved.id));
         push({ type: 'order', id: saved.id });
       } catch { el.disabled = false; }
@@ -877,13 +890,7 @@
       } catch (err) { toast(err.message); }
     }
     if (file && e.target.dataset.paste) { await setPaste(e.target.dataset.paste, file); e.target.value = ''; }
-    if (file && e.target.dataset.designFor) {
-      let image;
-      try { image = await readReceipt(file, 2400, 0.9); } catch (err) { return toast(err.message); }
-      try {
-        await call('design_add', { order_id: Number(e.target.dataset.designFor), image }); haptic('success'); toast('Дизайн сохранён'); render();
-      } catch { /* call уже показал ошибку */ }
-    }
+    if (file && (e.target.dataset.designFor || e.target.dataset.designNew !== undefined)) await putDesign(file);
     if (file && e.target.dataset.receiptFor) {
       let receipt;
       try { receipt = await readReceipt(file); } catch (err) { return toast(err.message); }
@@ -907,6 +914,16 @@
     const box = document.getElementById('payBox');
     if (box) box.hidden = !P.receipt;
   }
+  // Поля «Чек» / «Дизайн» в форме и карточке заказа: выделенное рамкой принимает Ctrl+V
+  function paintPz() {
+    const zones = [...$app.querySelectorAll('[data-pz]')];
+    if (zones.length && !zones.some((z) => z.dataset.pz === S.pz)) S.pz = zones[0].dataset.pz;
+    zones.forEach((z) => z.classList.toggle('on', z.dataset.pz === S.pz));
+  }
+  $app.addEventListener('click', (e) => {
+    const z = e.target.closest('[data-pz]');
+    if (z) { S.pz = z.dataset.pz; paintPz(); }
+  });
   // чек к новой оплате (форма заказа и карточка заказа)
   function showReceipt(data) {
     S.receipt = data;
@@ -914,6 +931,26 @@
     document.getElementById('receiptEmpty').hidden = true;
     haptic('success'); toast('Чек вставлен');
   }
+  // дизайн: в карточке заказа сохраняется сразу, в форме — вместе с заказом
+  async function putDesign(file) {
+    let image;
+    try { image = await readReceipt(file, 2400, 0.9); } catch (err) { return toast(err.message); }
+    const input = $app.querySelector('[data-design-for]');
+    if (input) {
+      toast('Сохраняю дизайн…');
+      try { await call('design_add', { order_id: Number(input.dataset.designFor), image }); haptic('success'); toast('Дизайн сохранён'); render(); }
+      catch { /* call уже показал ошибку */ }
+      return;
+    }
+    S.design = image;
+    const img = document.getElementById('designPreview'); img.src = image; img.hidden = false;
+    document.getElementById('designEmpty').hidden = true;
+    haptic('success'); toast('Дизайн вставлен — сохранится вместе с заказом');
+  }
+  const putPz = async (kind, file) => {
+    if (kind === 'design') return putDesign(file);
+    try { showReceipt(await readReceipt(file)); } catch (err) { toast(err.message); }
+  };
   async function setPaste(k, file) {
     try { S.paste[k] = k === 'design' ? await readReceipt(file, 2400, 0.9) : await readReceipt(file); }
     catch (err) { return toast(err.message); }
@@ -928,24 +965,23 @@
     if (!file) return; // обычный текст вставляется как всегда
     if (isPasteTab()) { e.preventDefault(); return setPaste(S.paste.target, file); }
     // в карточке заказа и в форме Ctrl+V прикрепляет чек к новой оплате
-    if (document.getElementById('receiptPreview')) {
-      e.preventDefault();
-      try { showReceipt(await readReceipt(file)); } catch (err) { toast(err.message); }
-    } else toast('Здесь некуда вставить картинку — откройте раздел «📎 Чеки»');
+    paintPz();
+    if ($app.querySelector(`[data-pz=${S.pz}]`)) { e.preventDefault(); putPz(S.pz, file); }
+    else toast('Здесь некуда вставить картинку — откройте раздел «📎 Чеки»');
   });
   $app.addEventListener('dragover', (e) => {
-    const z = e.target.closest(isPasteTab() ? '[data-zone]' : '[data-receipt-zone]');
+    const z = e.target.closest(isPasteTab() ? '[data-zone]' : '[data-pz]');
     if (z) { e.preventDefault(); z.classList.add('over'); }
   });
-  $app.addEventListener('dragleave', (e) => { const z = e.target.closest('[data-zone], [data-receipt-zone]'); if (z) z.classList.remove('over'); });
-  $app.addEventListener('drop', async (e) => {
-    const z = e.target.closest(isPasteTab() ? '[data-zone]' : '[data-receipt-zone]');
+  $app.addEventListener('dragleave', (e) => { const z = e.target.closest('[data-zone], [data-pz]'); if (z) z.classList.remove('over'); });
+  $app.addEventListener('drop', (e) => {
+    const z = e.target.closest(isPasteTab() ? '[data-zone]' : '[data-pz]');
     if (!z) return;
     e.preventDefault(); z.classList.remove('over');
     const file = imageFile(e.dataTransfer);
     if (!file) return toast('Перетащите картинку');
     if (z.dataset.zone) { S.paste.target = z.dataset.zone; setPaste(z.dataset.zone, file); }
-    else try { showReceipt(await readReceipt(file)); } catch (err) { toast(err.message); }
+    else { S.pz = z.dataset.pz; paintPz(); putPz(z.dataset.pz, file); }
   });
 
   function demoBar() {
