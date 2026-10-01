@@ -50,7 +50,7 @@
     catch (e) { if (!quiet) { toast(e.message); haptic('error'); } throw e; }
   }
   // списки заказов держим минуту: фильтры и поиск переключаются без запроса к серверу
-  const READS = ['me', 'orders', 'order', 'finance'];
+  const READS = ['me', 'orders', 'order', 'finance', 'stock', 'stock_item'];
   const cache = new Map();
   function cached(action, params) {
     const k = action + JSON.stringify(params), hit = cache.get(k);
@@ -275,9 +275,9 @@
     async dashboard() {
       const p = S.dash;
       const r = p.period === 'custom' ? { from: p.from, to: p.to } : range(p.period);
-      const [list, debts, fin] = await Promise.all([cached('orders', r), cached('orders', { debt: true }),
-        isOwner() ? cached('finance', r) : null]);
-      return dashboardHtml(list.filter((o) => o.stage !== 'Отменён'), debts, r, fin);
+      const [list, debts, fin, stock] = await Promise.all([cached('orders', r), cached('orders', { debt: true }),
+        isOwner() ? cached('finance', r) : null, cached('stock', {}).catch(() => null)]);
+      return dashboardHtml(list.filter((o) => o.stage !== 'Отменён'), debts, r, fin, stock);
     },
 
     async more() {
@@ -381,7 +381,26 @@
       <button class="btn ghost" data-act="expense">+ Добавить расход</button>`;
   }
 
-  function dashboardHtml(list, debts, r, fin) {
+  // ---------- склад ----------
+  const qtyFmt = (n) => String(Math.round(Number(n) * 100) / 100).replace('.', ',');
+  const isLow = (r) => r.stock !== null && r.min_qty !== null && Number(r.stock) < Number(r.min_qty);
+  // сначала то, что заканчивается, потом остальное со складом, в конце — где склад не ведётся
+  const stockOrder = (a, b) => (isLow(b) - isLow(a)) || ((a.stock === null) - (b.stock === null))
+    || (isLow(a) ? a.stock / a.min_qty - b.stock / b.min_qty : 0) || (a.sort - b.sort) || a.product.localeCompare(b.product);
+  const stockRow = (r) => `<div class="row tap" data-act="stockitem" data-v="${esc(r.product)}">
+    <div class="grow"><div class="title">${esc(r.product)}</div>
+    <div class="sub">${r.stock === null ? 'склад не ведётся' : r.min_qty !== null ? 'минимум ' + qtyFmt(r.min_qty) : 'минимум не задан'}</div></div>
+    <div class="amt"><b class="${isLow(r) ? 'red' : ''}">${r.stock === null ? '—' : qtyFmt(r.stock)}</b>${isLow(r) ? '<div><span class="badge b-red">мало</span></div>' : ''}</div></div>`;
+  function stockHtml(rows) {
+    if (!rows) return '';
+    const kept = rows.filter((r) => r.stock !== null), low = kept.filter(isLow).sort(stockOrder);
+    return `<h2>Склад${low.length ? ` · <span class="red">мало осталось: ${low.length}</span>` : ''}</h2>
+      ${low.length ? `<div class="list">${low.map(stockRow).join('')}</div>`
+        : `<div class="card hint">${kept.length ? `Всего хватает · на складе ${kept.length} товаров` : 'Склад ещё не заполнен — внесите остатки на начало месяца'}</div>`}
+      <button class="btn ghost" data-act="stock">Склад: все товары →</button>`;
+  }
+
+  function dashboardHtml(list, debts, r, fin, stock) {
     const p = S.dash;
     const sum = list.reduce((s, o) => s + o.total, 0), paid = list.reduce((s, o) => s + o.paid, 0);
     const priced = list.filter((o) => o.total > 0).length; // заказы из amoCRM без суммы не портят средний чек
@@ -409,6 +428,7 @@
           <div class="hint" style="margin-top:4px"><span class="green">получено ${money(paid)}</span> · <span class="red">не получено ${money(sum - paid)}</span> · собрано ${sum ? Math.round((paid / sum) * 100) : 0}%</div></div>
         <div class="kpi wide alert tap" data-act="tab" data-v="debtors"><div class="k">Долг всего, за всё время →</div><div class="v">${money(debtAll)} сум</div><div class="hint">${debts.length} заказов</div></div>
       </div>
+      ${stockHtml(stock)}
       ${financeHtml(fin)}
       ${isOwner() ? `<h2>Менеджеры</h2><div class="list">${mgr.map((g) => `<div class="row" style="display:block">
           <div style="display:flex;justify-content:space-between"><b>${esc(g.k)}</b><span class="amt"><b>${money(g.sum)}</b> · ${g.n} зак.</span></div>
@@ -477,6 +497,84 @@
         </div>
         <h2>Заказы клиента</h2>
         <div class="list">${c.orders.map(orderRow).join('')}</div>`;
+    },
+
+    // склад: все товары, сначала то, что заканчивается
+    async stock() {
+      const rows = [...(await cached('stock', {}))].sort(stockOrder);
+      const q = (S.stockQ || '').trim().toLowerCase();
+      const shown = rows.filter((r) => !q || r.product.toLowerCase().includes(q));
+      const low = rows.filter(isLow).length;
+      return `<h1>Склад</h1>
+        ${isOwner() ? `<div class="grid2"><button class="btn" style="margin:0" data-act="stockin" data-v="in">+ Приход товара</button>
+          <button class="btn ghost" style="margin:0" data-act="stockin" data-v="out">− Списание</button></div>
+          <button class="btn ghost" data-act="stockcount">Остатки на начало месяца и минимумы</button>` : ''}
+        <h2>${rows.filter((r) => r.stock !== null).length} товаров на складе${low ? ` · <span class="red">мало осталось: ${low}</span>` : ''}</h2>
+        <input class="search" type="search" placeholder="Поиск товара" value="${esc(S.stockQ || '')}" data-input="sq">
+        <div class="list">${shown.map(stockRow).join('') || '<div class="center hint">Ничего не нашлось</div>'}</div>
+        <p class="hint" style="margin:10px 6px">Остаток = на начало месяца + приход − списание − продано в заказах.
+          Заказ уменьшает склад сразу при сохранении, отменённый заказ возвращает товар.
+          Когда остаток опускается ниже минимума, бот пишет в группу «Pechat24 operator».</p>`;
+    },
+
+    // один товар: из чего сложился остаток, минимум, история
+    async stockitem(v) {
+      const r = await cached('stock_item', { product: v.product });
+      const line = (t, n, cls = '') => `<div class="total-line"><span>${t}</span><span class="${cls}">${n}</span></div>`;
+      return `<h1>${esc(r.product)}</h1>
+        <div class="kpis"><div class="kpi ${isLow(r) ? 'alert' : ''} wide"><div class="k">Остаток сейчас</div>
+          <div class="v">${r.stock === null ? '—' : qtyFmt(r.stock) + ' шт.'}</div>
+          <div class="hint">${r.stock === null ? 'Склад по этому товару не ведётся — внесите остаток на начало месяца или приход'
+            : r.min_qty !== null ? (isLow(r) ? 'меньше минимума ' : 'минимум ') + qtyFmt(r.min_qty) : 'минимум не задан'}</div></div></div>
+        ${r.stock === null ? '' : `<div class="card" style="margin-top:8px">
+          ${line(r.opening ? `На начало, ${fmtDate(r.base_date)}` : `С ${fmtDate(r.base_date)}`, qtyFmt(r.opening))}
+          ${line('Приход', '+' + qtyFmt(r.incoming), 'green')}
+          ${Number(r.outgoing) ? line('Списание', '−' + qtyFmt(r.outgoing), 'red') : ''}
+          ${line('Продано в заказах', '−' + qtyFmt(r.sold), 'red')}
+          <div class="total-line big"><span>Остаток</span><span>${qtyFmt(r.stock)}</span></div></div>`}
+        ${isOwner() ? `<h2>Минимум</h2><div class="card"><div class="hint">Когда остаток станет меньше — сигнал на дашборде и в Telegram.
+            Хорошо продаётся — 50, медленно — 10.</div>
+          <div style="display:flex;gap:6px;margin-top:8px"><input type="number" inputmode="numeric" id="minQty" value="${r.min_qty ?? ''}" placeholder="не задан">
+            <button class="btn sm ghost" data-act="minset" data-v="50">50</button><button class="btn sm ghost" data-act="minset" data-v="10">10</button>
+            <button class="btn sm" data-act="minsave">Сохранить</button></div></div>` : ''}
+        <h2>Приход и списание</h2>
+        <div class="list">${r.moves.map((m) => `<div class="row"><div class="grow">${m.kind === 'in' ? 'Приход' : 'Списание'}
+            <div class="sub">${fmtDate(m.moved_at)}${m.comment ? ' · ' + esc(m.comment) : ''}</div></div>
+          <div class="amt ${m.kind === 'in' ? 'green' : 'red'}"><b>${m.kind === 'in' ? '+' : '−'}${qtyFmt(m.qty)}</b></div>
+          ${isOwner() ? `<button class="btn sm danger" data-act="movedel" data-id="${m.id}">✕</button>` : ''}</div>`).join('')
+          || '<div class="row hint">Пока не было</div>'}</div>
+        ${r.counts.length ? `<h2>Остатки на начало месяца</h2><div class="list">${r.counts.map((c) => `<div class="row"><span class="grow">${fmtDate(c.month)}</span>
+          <span class="amt">${qtyFmt(c.qty)}</span></div>`).join('')}</div>` : ''}`;
+    },
+
+    // приход нового товара или списание: несколько товаров за раз
+    async stockin(v) {
+      const out = v.kind === 'out';
+      v.after = () => { if (!document.querySelector('#moveItems .mv')) ACTS.mvadd(); };
+      return `<h1>${out ? 'Списание' : 'Приход товара'}</h1>
+        <div class="card">
+          <label style="margin-top:0">Дата</label><input type="date" id="mvDate" value="${today()}">
+          <label>Товары</label><div id="moveItems"></div>
+          <button class="btn sm ghost" style="margin-top:8px" data-act="mvadd">+ Ещё товар</button>
+          <label>Комментарий</label><input id="mvComment" placeholder="${out ? 'брак, образец…' : 'поставщик, накладная…'}" autocomplete="off">
+        </div>
+        <button class="btn" data-act="mvsave">${out ? 'Списать' : 'Сохранить приход'}</button>`;
+    },
+
+    // остатки на начало месяца и минимумы — одним списком по всем товарам
+    async stockcount(v) {
+      const month = v.month || today().slice(0, 7);
+      const rows = [...(await cached('stock', {}))].sort((a, b) => (a.sort - b.sort) || a.product.localeCompare(b.product));
+      return `<h1>Остатки на начало месяца</h1>
+        <div class="card"><label style="margin-top:0">Месяц</label><input type="month" value="${month}" data-input="scmonth">
+          <div class="hint" style="margin-top:8px">Пересчитайте товар и впишите, сколько было на 1-е число. Пустое поле не меняется.
+            Минимум: когда остаток станет меньше, придёт сигнал (хорошо продаётся — 50, медленно — 10).</div></div>
+        <div class="card"><div class="srow hint"><span>Товар</span><span>Остаток</span><span>Минимум</span></div>
+          ${rows.map((r) => `<div class="srow" data-product="${esc(r.product)}"><span>${esc(r.product)}</span>
+            <input type="number" inputmode="numeric" min="0" data-f="qty" value="${r.base_date === month + '-01' ? qtyFmt(r.opening).replace(',', '.') : ''}"
+              placeholder="${r.stock === null ? '' : qtyFmt(r.stock)}">
+            <input type="number" inputmode="numeric" min="0" data-f="min" value="${r.min_qty ?? ''}" data-orig="${r.min_qty ?? ''}"></div>`).join('')}</div>
+        <button class="btn" data-act="scsave">Сохранить</button>`;
     },
 
     // все расходы за период дашборда
@@ -788,6 +886,57 @@
       if (!(await ask('Отклонить заявку?'))) return;
       setMe(await call('access_decide', { telegram_id: Number(card.dataset.req), approve: false })); toast('Заявка отклонена'); render();
     },
+    // склад
+    stock: () => { S.stockQ = ''; push({ type: 'stock' }); },
+    stockitem: (el) => push({ type: 'stockitem', product: el.dataset.v }),
+    stockin: (el) => push({ type: 'stockin', kind: el.dataset.v }),
+    stockcount: () => push({ type: 'stockcount' }),
+    mvadd: () => {
+      const names = S.dicts.products.filter((x) => x.active !== false).map((x) => x.name);
+      document.getElementById('moveItems').insertAdjacentHTML('beforeend', `<div class="mv">
+        <select data-f="product">${opts(names, '', 'Товар')}</select>
+        <input type="number" inputmode="numeric" min="0" data-f="qty" placeholder="шт.">
+        <button data-act="mvdel" aria-label="Убрать">×</button></div>`);
+    },
+    mvdel: (el) => el.closest('.mv').remove(),
+    async mvsave(el) {
+      const v = S.stack[S.stack.length - 1];
+      const items = [...document.querySelectorAll('#moveItems .mv')].map((r) => ({
+        product: r.querySelector('[data-f=product]').value, qty: Number(r.querySelector('[data-f=qty]').value) }));
+      if (items.some((i) => i.product && !(i.qty > 0))) return toast('Укажите количество');
+      const ok = items.filter((i) => i.product && i.qty > 0);
+      if (!ok.length) return toast('Выберите товар и количество');
+      el.disabled = true;
+      try {
+        await call('stock_in', { kind: v.kind, items: ok, moved_at: document.getElementById('mvDate').value, comment: document.getElementById('mvComment').value });
+        haptic('success'); toast(v.kind === 'out' ? 'Списано' : 'Приход сохранён'); pop();
+      } catch { el.disabled = false; }
+    },
+    async movedel(el) {
+      if (!(await ask('Удалить эту запись прихода / списания?'))) return;
+      await call('stock_move_delete', { id: Number(el.dataset.id) }); toast('Удалено'); render();
+    },
+    minset: (el) => { document.getElementById('minQty').value = el.dataset.v; },
+    async minsave(el) {
+      const v = S.stack[S.stack.length - 1];
+      el.disabled = true;
+      try { await call('stock_count', { rows: [{ product: v.product, min_qty: document.getElementById('minQty').value }] }); haptic('success'); toast('Минимум сохранён'); render(); }
+      catch { el.disabled = false; }
+    },
+    async scsave(el) {
+      const month = $app.querySelector('[data-input=scmonth]').value;
+      const rows = [...document.querySelectorAll('.srow[data-product]')].map((r) => {
+        const qty = r.querySelector('[data-f=qty]').value.trim(), min = r.querySelector('[data-f=min]');
+        const row = { product: r.dataset.product, qty };
+        if (min.value.trim() !== min.dataset.orig) row.min_qty = min.value.trim(); // минимум шлём только изменённый
+        return row;
+      }).filter((r) => r.qty !== '' || r.min_qty !== undefined);
+      if (!rows.length) return toast('Ничего не изменено');
+      if (rows.some((r) => r.qty !== '') && !month) return toast('Укажите месяц');
+      el.disabled = true;
+      try { await call('stock_count', { month, rows }); haptic('success'); toast('Сохранено'); pop(); }
+      catch { el.disabled = false; }
+    },
     // раздел «Чек и дизайн»
     ptarget: (el) => { S.paste.target = el.dataset.v; paintPaste(); },
     pfile: (el) => { S.paste.target = el.dataset.v; paintPaste(); $app.querySelector(`[data-paste=${el.dataset.v}]`).click(); },
@@ -872,15 +1021,16 @@
   $app.addEventListener('input', (e) => {
     const k = e.target.dataset.input;
     if (e.target.closest('#items')) recalcForm();
-    if (k === 'q' || k === 'cq' || k === 'mq' || k === 'pq') {
+    if (k === 'q' || k === 'cq' || k === 'mq' || k === 'pq' || k === 'sq') {
       if (k === 'q') S.filters.q = e.target.value; else if (k === 'cq') S.clientQ = e.target.value;
-      else if (k === 'pq') S.paste.q = e.target.value; else S.mergeQ = e.target.value;
+      else if (k === 'pq') S.paste.q = e.target.value; else if (k === 'sq') S.stockQ = e.target.value; else S.mergeQ = e.target.value;
       clearTimeout(ACTS.qt); ACTS.qt = setTimeout(() => { const pos = e.target.selectionStart; render().then(() => { const s = $app.querySelector(`[data-input=${k}]`); if (s) { s.focus(); s.setSelectionRange(pos, pos); } }); }, 350);
     }
   });
   $app.addEventListener('change', async (e) => {
     const k = e.target.dataset.input;
     if (k === 'dfrom' || k === 'dto') { S.dash[k === 'dfrom' ? 'from' : 'to'] = e.target.value; render(); }
+    if (k === 'scmonth' && e.target.value) { S.stack[S.stack.length - 1].month = e.target.value; render(); } // подставить внесённое за тот месяц
     if (e.target.dataset.demo !== undefined) { location.search = '?demo=' + e.target.value; }
     if (k === 'source') document.getElementById('igField').hidden = !isInstagram(e.target.value);
     const file = e.target.files && e.target.files[0];

@@ -117,6 +117,13 @@ label { display: block; font-size: 13px; color: var(--hint); margin: 10px 2px 4p
 .design a, .design img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .design button { position: absolute; top: 3px; right: 3px; width: 24px; height: 24px; border: 0; border-radius: 50%;
   background: rgba(0,0,0,.55); color: #fff; font-size: 12px; cursor: pointer; }
+/* склад: строки прихода и таблица остатков */
+.mv { display: grid; grid-template-columns: 1fr 90px 34px; gap: 6px; align-items: center; padding: 4px 0; }
+.mv button { border: 0; background: none; color: var(--red); font-size: 22px; cursor: pointer; }
+.srow { display: grid; grid-template-columns: 1fr 84px 84px; gap: 6px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--sep); }
+.srow:last-child { border-bottom: 0; }
+.srow > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srow input { min-height: 36px; padding: 6px 8px; }
 .step span { font-size: 10.5px; line-height: 1.2; text-align: center; hyphens: manual; }
 .pips { display: inline-flex; gap: 2px; margin-right: 6px; vertical-align: middle; }
 .pips i { width: 10px; height: 4px; border-radius: 2px; background: var(--sep); }

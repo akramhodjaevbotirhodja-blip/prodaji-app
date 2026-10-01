@@ -48,7 +48,13 @@
     db.expenses = [{ id: 1, spent_at: iso(today), amount: 450000, category: 'Материалы', method: 'cash', comment: 'бумага' },
       { id: 2, spent_at: iso(today), amount: 300000, category: 'Реклама', method: 'card', comment: 'Instagram' }];
     db.designs = [];
-    let seq = { o: Math.max(0, ...db.orders.map((o) => o.id)), p: 1, e: 3, d: 1 };
+    // склад: остаток на начало месяца по двум товарам, чтобы было видно и норму, и «мало осталось»
+    const month1 = iso(today).slice(0, 8) + '01';
+    db.counts = [{ product: 'Печать автомат', month: month1, qty: 60 }, { product: 'Штамп', month: month1, qty: 12 }];
+    db.moves = [{ id: 1, product: 'Штамп', kind: 'in', qty: 5, moved_at: iso(today), comment: 'поставка' }];
+    demoDicts.products.find((x) => x.name === 'Печать автомат').min_qty = 50;
+    demoDicts.products.find((x) => x.name === 'Штамп').min_qty = 10;
+    let seq = { o: Math.max(0, ...db.orders.map((o) => o.id)), p: 1, e: 3, d: 1, m: 2 };
     db.payments.forEach((p) => (p.id = seq.p++));
     const user = role === 'owner'
       ? { telegram_id: 1, name: 'Руководитель (демо)', role: 'owner', code: null }
@@ -153,6 +159,38 @@
         return { ok: true };
       },
       expense_delete: (p) => { db.expenses = db.expenses.filter((x) => x.id !== Number(p.id)); return { ok: true }; },
+      stock: () => demoDicts.products.filter((x) => x.active !== false).map((x, i) => {
+        const c = db.counts.filter((r) => r.product === x.name).sort((a, b) => b.month.localeCompare(a.month))[0];
+        const mv = db.moves.filter((m) => m.product === x.name);
+        const base = c ? c.month : mv.map((m) => m.moved_at).sort()[0] || null;
+        const after = (d) => base && d >= base;
+        const sumMv = (k) => mv.filter((m) => m.kind === k && after(m.moved_at)).reduce((s, m) => s + m.qty, 0);
+        const sold = db.items.filter((it) => it.product === x.name && after((db.orders.find((o) => o.id === it.order_id && o.stage !== 'Отменён') || {}).order_date || ''))
+          .reduce((s, it) => s + Number(it.qty), 0);
+        const opening = c ? c.qty : 0, incoming = sumMv('in'), outgoing = sumMv('out');
+        return { product: x.name, base_date: base, opening, incoming, outgoing, sold, sort: i,
+          stock: base ? opening + incoming - outgoing - sold : null, min_qty: x.min_qty ?? null, low_alerted: false };
+      }),
+      stock_item: (p) => ({ ...A.stock().find((r) => r.product === p.product),
+        counts: db.counts.filter((r) => r.product === p.product).sort((a, b) => b.month.localeCompare(a.month)),
+        moves: db.moves.filter((m) => m.product === p.product).sort((a, b) => b.id - a.id) }),
+      stock_in: (p) => {
+        (p.items || []).filter((i) => i.product && Number(i.qty) > 0).forEach((i) => db.moves.push({ id: seq.m++, product: i.product,
+          kind: p.kind === 'out' ? 'out' : 'in', qty: Number(i.qty), moved_at: p.moved_at || iso(new Date()), comment: p.comment || null }));
+        return { ok: true };
+      },
+      stock_move_delete: (p) => { db.moves = db.moves.filter((m) => m.id !== Number(p.id)); return { ok: true }; },
+      stock_count: (p) => {
+        const month = p.month + '-01';
+        (p.rows || []).forEach((r) => {
+          if (r.qty !== '' && r.qty != null) {
+            db.counts = db.counts.filter((c) => !(c.product === r.product && c.month === month));
+            db.counts.push({ product: r.product, month, qty: Number(r.qty) });
+          }
+          if (r.min_qty !== undefined) demoDicts.products.find((x) => x.name === r.product).min_qty = r.min_qty === '' ? null : Number(r.min_qty);
+        });
+        return { ok: true };
+      },
       dict_add: (p) => {
         const list = demoDicts[p.kind];
         const key = p.kind === 'designers' ? 'code' : 'name';
