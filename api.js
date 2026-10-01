@@ -28,7 +28,7 @@
   const demoDicts = {
     staff: ['MY', 'SH', 'D', 'V', 'OY', 'YO'].map((c, i) => ({ code: c, name: c, telegram_id: i < 4 ? 1000 + i : null, role: 'manager', active: true })),
     designers: ['1A', 'IK', 'F', 'N', 'Zu', 'Lu', 'AS', 'AD', 'AO', 'AB', 'R'].map((code) => ({ code, active: true })),
-    sources: ['Instagram', 'Telegram 1', 'Telegram 2', 'Повторный клиент', 'Рекомендация', 'Сайт', 'Звонок', 'Другое'].map((name) => ({ name, active: true })),
+    sources: ['Instagram', '1 Pechat', '2 Botir', 'Повторный клиент', 'Рекомендация', 'Сайт', 'Звонок', 'Другое'].map((name) => ({ name, active: true })),
     products: ['Печать автомат', 'Печать пластик', 'Печать металл', 'Штамп', 'Датер / нумератор', 'Табличка', 'Бейдж', 'Наклейка',
       'Сертификат', 'Визитка', 'Баннер', 'Логотип / дизайн', 'Подушка / краска', 'Пакеты', 'Другое'].map((name) => ({ name, active: true })),
     stages: STAGES,
@@ -47,7 +47,8 @@
     db.requests = [{ telegram_id: 777000111, name: 'Новый менеджер', username: 'new_manager', created_at: iso(today) }];
     db.expenses = [{ id: 1, spent_at: iso(today), amount: 450000, category: 'Материалы', method: 'cash', comment: 'бумага' },
       { id: 2, spent_at: iso(today), amount: 300000, category: 'Реклама', method: 'card', comment: 'Instagram' }];
-    let seq = { o: Math.max(0, ...db.orders.map((o) => o.id)), p: 1, e: 3 };
+    db.designs = [];
+    let seq = { o: Math.max(0, ...db.orders.map((o) => o.id)), p: 1, e: 3, d: 1 };
     db.payments.forEach((p) => (p.id = seq.p++));
     const user = role === 'owner'
       ? { telegram_id: 1, name: 'Руководитель (демо)', role: 'owner', code: null }
@@ -85,7 +86,14 @@
         .filter((o) => (!p.from || o.order_date >= p.from) && (!p.to || o.order_date <= p.to))
         .filter((o) => !p.debt || (o.rest > 0 && o.stage !== 'Отменён'))
         .sort((a, b) => (b.order_date + String(b.id).padStart(9, '0')).localeCompare(a.order_date + String(a.id).padStart(9, '0'))),
-      order: (p) => ({ ...view(find(p.id)), payments: db.payments.filter((x) => x.order_id === Number(p.id)) }),
+      order: (p) => ({ ...view(find(p.id)), payments: db.payments.filter((x) => x.order_id === Number(p.id)),
+        designs: db.designs.filter((x) => x.order_id === Number(p.id)) }),
+      design_add: (p) => { find(p.order_id); db.designs.push({ id: seq.d++, order_id: Number(p.order_id), url: p.image }); return A.order({ id: p.order_id }); },
+      design_delete: (p) => {
+        const d = db.designs.find((x) => x.id === Number(p.id));
+        db.designs = db.designs.filter((x) => x !== d);
+        return A.order({ id: d.order_id });
+      },
       order_save: (p) => {
         const items = (p.items || []).filter((i) => i.product);
         if (!items.length) throw new Error('Добавьте хотя бы один продукт');
@@ -101,6 +109,7 @@
         const into = find(p.id), from = find(p.from);
         db.items.forEach((i) => { if (i.order_id === from.id) i.order_id = into.id; });
         db.payments.forEach((x) => { if (x.order_id === from.id) x.order_id = into.id; });
+        db.designs.forEach((x) => { if (x.order_id === from.id) x.order_id = into.id; });
         ['client', 'company', 'phone', 'instagram', 'source', 'delivery_type', 'delivery_region', 'delivery'].forEach((f) => { into[f] = into[f] || from[f]; });
         db.orders = db.orders.filter((o) => o !== from);
         return A.order({ id: into.id });

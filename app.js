@@ -10,7 +10,7 @@
     'Ташкент': ['Наш курьер', 'Яндекс Доставка', 'Такси', 'Другое'],
     'Область': ['BTS', 'EMU', 'Узпочта', 'Такси / попутка', 'Другое'],
   };
-  const S = { user: null, dicts: null, requests: [], tab: 'orders', stack: [], filters: { period: 'month', status: 'all', stage: 'all', q: '' }, dash: { period: 'month', from: '', to: '' } };
+  const S = { user: null, dicts: null, requests: [], tab: 'orders', stack: [], paste: { target: 'receipt' }, filters: { period: 'month', status: 'all', stage: 'all', q: '' }, dash: { period: 'month', from: '', to: '' } };
 
   // ---------- утилиты ----------
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -73,16 +73,19 @@
   // Скриншот чека: уменьшаем на телефоне до 1600 px и JPEG, чтобы не гонять мегабайты
   const receiptPicker = () => `<label class="btn sm ghost receipt-pick">📎 Скриншот чека
       <input type="file" accept="image/*" hidden data-receipt-new></label><img id="receiptPreview" class="receipt-preview" hidden alt="Чек">`;
-  function readReceipt(file) {
+  // дизайн сохраняем крупнее и чётче (max = 2400, quality = 0.9)
+  function readReceipt(file, max = 1600, quality = 0.8) {
     return new Promise((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
-        const k = Math.min(1, 1600 / Math.max(img.width, img.height));
+        const k = Math.min(1, max / Math.max(img.width, img.height));
         const c = document.createElement('canvas');
         c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); // прозрачный PNG в JPEG иначе станет чёрным
+        ctx.drawImage(img, 0, 0, c.width, c.height);
         URL.revokeObjectURL(img.src);
-        resolve(c.toDataURL('image/jpeg', 0.8));
+        resolve(c.toDataURL('image/jpeg', quality));
       };
       img.onerror = () => reject(new Error('Не удалось открыть картинку'));
       img.src = URL.createObjectURL(file);
@@ -173,6 +176,52 @@
         <div class="hint" style="margin:0 6px 8px">${rows.length} заказов · ${money(sum)} сум</div>
         <div class="list">${rows.map(orderRow).join('') || '<div class="center hint">Заказов нет</div>'}</div>
         <button class="fab" data-act="new" aria-label="Новый заказ">+</button>`;
+    },
+
+    // Чек и утверждённый дизайн: Ctrl+V (или файл) → выбрать заказ → сохранить
+    async paste() {
+      const P = S.paste;
+      const zone = (k, title, hint) => `<div class="drop ${P.target === k ? 'on' : ''}" data-act="ptarget" data-v="${k}" data-zone="${k}">
+        <div class="drop-head"><b>${title}</b><span class="drop-btns">
+          <button class="btn sm ghost" data-act="pfile" data-v="${k}">📎 Файл</button>
+          <button class="btn sm danger" data-act="pclear" data-v="${k}" ${P[k] ? '' : 'hidden'}>✕</button></span></div>
+        <img alt="" ${P[k] ? `src="${P[k]}"` : 'hidden'}>
+        <div class="drop-empty hint" ${P[k] ? 'hidden' : ''}>${hint}</div></div>`;
+      let order;
+      if (P.orderId) {
+        const o = await cached('order', { id: P.orderId });
+        const bare = o.payments.filter((p) => !p.receipt_path && !p.receipt_url); // оплаты, к которым ещё нет чека
+        const to = P.payTo || 'new';
+        order = `<div class="list">${orderRow(o)}</div>
+          <div class="hint" style="margin:6px 6px 0">Оплачено ${money(o.paid)} из ${money(o.total)}${o.rest > 0 ? ` · <span class="red">остаток ${money(o.rest)}</span>` : ''}
+            ${(o.designs || []).length ? ` · дизайнов уже ${o.designs.length}` : ''}</div>
+          <button class="btn ghost" data-act="punpick">Выбрать другой заказ</button>
+          <div class="card" id="payBox" style="margin-top:8px" ${P.receipt ? '' : 'hidden'}><b>Оплата по чеку</b>
+            ${bare.length ? `<div class="chips wrap" style="margin-top:8px">${[['new', 'Новая оплата'],
+              ...bare.map((p) => [p.id, `Без чека: ${fmtDate(p.paid_at)} · ${money(p.amount)} · ${METHODS[p.method]}`])]
+              .map(([k, t]) => `<button class="chip ${String(k) === String(to) ? 'on' : ''}" data-act="payto" data-v="${k}">${esc(t)}</button>`).join('')}</div>` : ''}
+            <div id="newPay" ${to === 'new' ? '' : 'hidden'}>
+              ${segHtml('method', 'click')}
+              <label>Сумма</label><input type="number" inputmode="numeric" placeholder="Сумма" value="${o.rest > 0 ? o.rest : ''}" id="payAmount">
+              <div class="grid2"><div><label>Дата оплаты</label><input type="date" value="${today()}" id="payDate"></div>
+              <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="payTime"></div></div></div></div>`;
+      } else {
+        const list = await cached('orders', {});
+        const q = (P.q || '').trim().toLowerCase();
+        // без поиска — свежие заказы в работе; поиском находится любой
+        const rows = (q ? list.filter((o) => [o.client, o.company, o.phone, o.instagram, String(o.id)].some((v) => String(v || '').toLowerCase().includes(q)))
+          : list.filter((o) => o.stage !== CLOSED && o.stage !== CANCEL)).slice(0, 30);
+        order = `<input class="search" type="search" placeholder="Поиск: клиент, компания, телефон, №" value="${esc(P.q || '')}" data-input="pq">
+          <div class="list">${rows.map((o) => orderRow(o).replace('data-act="open"', 'data-act="ppick"')).join('') || '<div class="center hint">Ничего не нашлось</div>'}</div>`;
+      }
+      return `<h1>Чек и дизайн</h1>
+        <p class="hint" style="margin:0 6px 10px">Скопируйте скриншот (Win+Shift+S или «Копировать» в Telegram) и нажмите <b>Ctrl+V</b> —
+          картинка встанет в выделенное поле. Нажмите на другое поле, чтобы вставлять туда. На телефоне — кнопка «📎 Файл».</p>
+        ${zone('receipt', '🧾 Чек оплаты', 'Ctrl+V — вставить скриншот чека')}
+        ${zone('design', '🎨 Дизайн, который утвердил клиент', 'Необязательно. Нажмите сюда, затем Ctrl+V')}
+        <h2>Заказ</h2>${order}
+        <button class="btn" data-act="psave">Сохранить в заказ</button>
+        <input type="file" accept="image/*" hidden data-paste="receipt"><input type="file" accept="image/*" hidden data-paste="design">`;
     },
 
     // клиентская база: клиенты, у которых есть закрытая сделка (только руководитель)
@@ -477,6 +526,11 @@
           <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="payTime"></div></div>
           ${receiptPicker()}
           <button class="btn" data-act="payadd">Сохранить оплату</button></div>` : ''}
+        <h2>Утверждённый дизайн</h2>
+        <div class="card">${(o.designs || []).length ? `<div class="designs">${o.designs.map((d) => `<div class="design">
+            <a href="${esc(d.url)}" data-act="receipt"><img src="${esc(d.url)}" alt="Дизайн"></a>
+            <button data-act="designdel" data-id="${d.id}" aria-label="Удалить">✕</button></div>`).join('')}</div>` : '<div class="hint">Дизайн ещё не прикреплён</div>'}
+          <label class="btn sm ghost receipt-pick">🎨 Добавить дизайн<input type="file" accept="image/*" hidden data-design-for="${o.id}"></label></div>
         <button class="btn ghost" data-act="edit">Редактировать заказ</button>
         <button class="btn ghost" data-act="merge">Объединить с другим заказом</button>
         ${isOwner() ? '<button class="btn danger" data-act="delete">Удалить заказ</button>' : ''}`;
@@ -716,6 +770,45 @@
       if (!(await ask('Отклонить заявку?'))) return;
       setMe(await call('access_decide', { telegram_id: Number(card.dataset.req), approve: false })); toast('Заявка отклонена'); render();
     },
+    // раздел «Чек и дизайн»
+    ptarget: (el) => { S.paste.target = el.dataset.v; paintPaste(); },
+    pfile: (el) => { S.paste.target = el.dataset.v; paintPaste(); $app.querySelector(`[data-paste=${el.dataset.v}]`).click(); },
+    pclear: (el) => { S.paste[el.dataset.v] = null; paintPaste(); },
+    ppick: (el) => { Object.assign(S.paste, { orderId: Number(el.dataset.id), payTo: null }); render(); },
+    punpick: () => { S.paste.orderId = null; render(); },
+    payto: (el) => {
+      S.paste.payTo = el.dataset.v;
+      el.parentNode.querySelectorAll('.chip').forEach((b) => b.classList.toggle('on', b === el));
+      document.getElementById('newPay').hidden = el.dataset.v !== 'new';
+    },
+    async psave(el) {
+      const P = S.paste;
+      if (!P.receipt && !P.design) return toast('Вставьте чек или дизайн (Ctrl+V)');
+      if (!P.orderId) return toast('Выберите заказ');
+      let pay = null;
+      if (P.receipt && (!P.payTo || P.payTo === 'new')) {
+        const amount = Number(document.getElementById('payAmount').value);
+        if (!(amount > 0)) return toast('Введите сумму оплаты по чеку');
+        const o = await cached('order', { id: P.orderId });
+        if (amount > o.rest && !(await ask(`Сумма больше остатка (${money(o.rest)}). Всё равно сохранить?`))) return;
+        pay = { order_id: P.orderId, method: segVal('method'), amount, receipt: P.receipt,
+          paid_at: document.getElementById('payDate').value, paid_time: document.getElementById('payTime').value };
+      }
+      el.disabled = true;
+      try {
+        if (P.receipt) {
+          await call(pay ? 'payment_add' : 'payment_receipt', pay || { id: Number(P.payTo), receipt: P.receipt });
+          P.receipt = null; paintPaste(); // чек уже сохранён — при повторе не создадим вторую оплату
+        }
+        if (P.design) await call('design_add', { order_id: P.orderId, image: P.design });
+        haptic('success'); toast(`Сохранено в заказ №${P.orderId}`);
+        S.paste = { target: 'receipt' }; render();
+      } catch { el.disabled = false; }
+    },
+    async designdel(el) {
+      if (!(await ask('Удалить этот дизайн?'))) return;
+      await call('design_delete', { id: Number(el.dataset.id) }); toast('Дизайн удалён'); render();
+    },
     link: (el) => (tg && tg.openLink ? tg.openLink(el.href) : window.open(el.href, '_blank')),
     receipt: (el) => ACTS.link(el),
     copyid: (el) => { navigator.clipboard && navigator.clipboard.writeText(el.dataset.v); toast('ID скопирован'); },
@@ -761,8 +854,9 @@
   $app.addEventListener('input', (e) => {
     const k = e.target.dataset.input;
     if (e.target.closest('#items')) recalcForm();
-    if (k === 'q' || k === 'cq' || k === 'mq') {
-      if (k === 'q') S.filters.q = e.target.value; else if (k === 'cq') S.clientQ = e.target.value; else S.mergeQ = e.target.value;
+    if (k === 'q' || k === 'cq' || k === 'mq' || k === 'pq') {
+      if (k === 'q') S.filters.q = e.target.value; else if (k === 'cq') S.clientQ = e.target.value;
+      else if (k === 'pq') S.paste.q = e.target.value; else S.mergeQ = e.target.value;
       clearTimeout(ACTS.qt); ACTS.qt = setTimeout(() => { const pos = e.target.selectionStart; render().then(() => { const s = $app.querySelector(`[data-input=${k}]`); if (s) { s.focus(); s.setSelectionRange(pos, pos); } }); }, 350);
     }
   });
@@ -778,6 +872,14 @@
         const img = document.getElementById('receiptPreview'); img.src = S.receipt; img.hidden = false;
       } catch (err) { toast(err.message); }
     }
+    if (file && e.target.dataset.paste) { await setPaste(e.target.dataset.paste, file); e.target.value = ''; }
+    if (file && e.target.dataset.designFor) {
+      let image;
+      try { image = await readReceipt(file, 2400, 0.9); } catch (err) { return toast(err.message); }
+      try {
+        await call('design_add', { order_id: Number(e.target.dataset.designFor), image }); haptic('success'); toast('Дизайн сохранён'); render();
+      } catch { /* call уже показал ошибку */ }
+    }
     if (file && e.target.dataset.receiptFor) {
       let receipt;
       try { receipt = await readReceipt(file); } catch (err) { return toast(err.message); }
@@ -785,6 +887,54 @@
         await call('payment_receipt', { id: Number(e.target.dataset.receiptFor), receipt }); haptic('success'); toast('Чек сохранён'); render();
       } catch { /* call уже показал ошибку */ }
     }
+  });
+
+  // ---------- вставка картинок: Ctrl+V и перетаскивание ----------
+  // раздел «Чек и дизайн» перерисовываем точечно, чтобы не сбросить уже введённую сумму
+  function paintPaste() {
+    const P = S.paste;
+    $app.querySelectorAll('[data-zone]').forEach((z) => {
+      const k = z.dataset.zone, img = z.querySelector('img');
+      z.classList.toggle('on', P.target === k);
+      img.hidden = !P[k]; if (P[k]) img.src = P[k]; else img.removeAttribute('src');
+      z.querySelector('.drop-empty').hidden = !!P[k];
+      z.querySelector('[data-act=pclear]').hidden = !P[k];
+    });
+    const box = document.getElementById('payBox');
+    if (box) box.hidden = !P.receipt;
+  }
+  async function setPaste(k, file) {
+    try { S.paste[k] = k === 'design' ? await readReceipt(file, 2400, 0.9) : await readReceipt(file); }
+    catch (err) { return toast(err.message); }
+    paintPaste(); haptic('success');
+    toast(k === 'design' ? 'Дизайн вставлен' : S.paste.orderId ? 'Чек вставлен' : 'Чек вставлен — выберите заказ');
+  }
+  const isPasteTab = () => !S.stack.length && S.tab === 'paste';
+  const imageFile = (dt) => [...((dt && dt.files) || [])].find((f) => f.type.startsWith('image/'))
+    || [...((dt && dt.items) || [])].filter((i) => i.kind === 'file' && i.type.startsWith('image/')).map((i) => i.getAsFile())[0];
+  document.addEventListener('paste', async (e) => {
+    const file = imageFile(e.clipboardData);
+    if (!file) return; // обычный текст вставляется как всегда
+    if (isPasteTab()) { e.preventDefault(); return setPaste(S.paste.target, file); }
+    // в карточке заказа и в форме Ctrl+V прикрепляет чек к новой оплате
+    const prev = document.getElementById('receiptPreview');
+    if (prev) {
+      e.preventDefault();
+      try { S.receipt = await readReceipt(file); prev.src = S.receipt; prev.hidden = false; toast('Чек вставлен'); }
+      catch (err) { toast(err.message); }
+    }
+  });
+  $app.addEventListener('dragover', (e) => {
+    const z = isPasteTab() && e.target.closest('[data-zone]');
+    if (z) { e.preventDefault(); z.classList.add('over'); }
+  });
+  $app.addEventListener('dragleave', (e) => { const z = e.target.closest('[data-zone]'); if (z) z.classList.remove('over'); });
+  $app.addEventListener('drop', (e) => {
+    const z = isPasteTab() && e.target.closest('[data-zone]');
+    if (!z) return;
+    e.preventDefault(); z.classList.remove('over');
+    const file = imageFile(e.dataTransfer);
+    if (file) { S.paste.target = z.dataset.zone; setPaste(z.dataset.zone, file); } else toast('Перетащите картинку');
   });
 
   function demoBar() {
