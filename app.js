@@ -556,6 +556,7 @@
           <label style="margin-top:0">Дата</label><input type="date" id="mvDate" value="${today()}">
           <label>Товары</label><div id="moveItems"></div>
           <button class="btn sm ghost" style="margin-top:8px" data-act="mvadd">+ Ещё товар</button>
+          <div class="hint" style="margin-top:6px">Нового товара нет в списке? Добавьте его на странице «Остатки на начало месяца и минимумы».</div>
           <label>Комментарий</label><input id="mvComment" placeholder="${out ? 'брак, образец…' : 'поставщик, накладная…'}" autocomplete="off">
         </div>
         <button class="btn" data-act="mvsave">${out ? 'Списать' : 'Сохранить приход'}</button>`;
@@ -565,15 +566,20 @@
     async stockcount(v) {
       const month = v.month || today().slice(0, 7);
       const rows = [...(await cached('stock', {}))].sort((a, b) => (a.sort - b.sort) || a.product.localeCompare(b.product));
+      const draft = v.draft || {}; // уже вписанное, пока добавляли новый товар
+      const val = (r, f, def) => (draft[r.product] && draft[r.product][f] !== undefined ? draft[r.product][f] : def);
       return `<h1>Остатки на начало месяца</h1>
         <div class="card"><label style="margin-top:0">Месяц</label><input type="month" value="${month}" data-input="scmonth">
           <div class="hint" style="margin-top:8px">Пересчитайте товар и впишите, сколько было на 1-е число. Пустое поле не меняется.
             Минимум: когда остаток станет меньше, придёт сигнал (хорошо продаётся — 50, медленно — 10).</div></div>
         <div class="card"><div class="srow hint"><span>Товар</span><span>Остаток</span><span>Минимум</span></div>
           ${rows.map((r) => `<div class="srow" data-product="${esc(r.product)}"><span>${esc(r.product)}</span>
-            <input type="number" inputmode="numeric" min="0" data-f="qty" value="${r.base_date === month + '-01' ? qtyFmt(r.opening).replace(',', '.') : ''}"
+            <input type="number" inputmode="numeric" min="0" data-f="qty" value="${esc(val(r, 'qty', r.base_date === month + '-01' ? qtyFmt(r.opening).replace(',', '.') : ''))}"
               placeholder="${r.stock === null ? '' : qtyFmt(r.stock)}">
-            <input type="number" inputmode="numeric" min="0" data-f="min" value="${r.min_qty ?? ''}" data-orig="${r.min_qty ?? ''}"></div>`).join('')}</div>
+            <input type="number" inputmode="numeric" min="0" data-f="min" value="${esc(val(r, 'min', r.min_qty ?? ''))}" data-orig="${r.min_qty ?? ''}"></div>`).join('')}
+          <label>Товара нет в списке? Добавьте его</label>
+          <div style="display:flex;gap:6px"><input id="newProduct" placeholder="Название, например R45" autocomplete="off">
+            <button class="btn sm" data-act="stockadd">Добавить</button></div></div>
         <button class="btn" data-act="scsave">Сохранить</button>`;
     },
 
@@ -922,6 +928,24 @@
       el.disabled = true;
       try { await call('stock_count', { rows: [{ product: v.product, min_qty: document.getElementById('minQty').value }] }); haptic('success'); toast('Минимум сохранён'); render(); }
       catch { el.disabled = false; }
+    },
+    // новый товар прямо со страницы остатков (попадёт и в справочник продуктов для заказов)
+    async stockadd(el) {
+      const v = S.stack[S.stack.length - 1], inp = document.getElementById('newProduct'), name = inp.value.trim();
+      if (!name) return toast('Впишите название товара');
+      if (S.dicts.products.some((x) => x.name.toLowerCase() === name.toLowerCase())) return toast('Такой товар уже есть в списке');
+      v.draft = {}; // не теряем уже вписанные цифры
+      document.querySelectorAll('.srow[data-product]').forEach((r) => {
+        v.draft[r.dataset.product] = { qty: r.querySelector('[data-f=qty]').value, min: r.querySelector('[data-f=min]').value };
+      });
+      v.month = $app.querySelector('[data-input=scmonth]').value || v.month;
+      el.disabled = true;
+      try {
+        setMe(await call('dict_add', { kind: 'products', name })); haptic('success'); toast(`Добавлен: ${name}`);
+        await render();
+        const row = $app.querySelector(`.srow[data-product="${CSS.escape(name)}"] [data-f=qty]`);
+        if (row) { row.scrollIntoView({ block: 'center' }); row.focus(); }
+      } catch { el.disabled = false; }
     },
     async scsave(el) {
       const month = $app.querySelector('[data-input=scmonth]').value;
