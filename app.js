@@ -106,7 +106,7 @@
   const CANCEL = 'Отменён';
   const CLOSED = 'Сделка закрыта';
   // цвет краски печати / штампа (у продукта в справочнике ink = true)
-  const INKS = { 'Синий': '#1e5bd8', 'Чёрный': '#111', 'Красный': '#d62828', 'Зелёный': '#1f9d48', 'Розовый': '#e85aa8' };
+  const INKS = { "Ko'k": '#1e5bd8', 'Qora': '#111', 'Qizil': '#d62828', 'Yashil': '#1f9d48', 'Pushti': '#e85aa8' };
   const hasInk = (name) => S.dicts.products.some((p) => p.name === name && p.ink);
   const inkDot = (ink) => (ink ? ` <span class="hint"><i class="dot" style="background:${INKS[ink] || '#999'}"></i>${esc(ink)}</span>` : '');
   const closeDebtMsg = (rest) => `Нельзя закрыть сделку: остаток долга ${money(rest)} сум. Сначала внесите оплату.`;
@@ -721,7 +721,7 @@
   const itemHtml = (i) => `<div class="item" data-product="${esc(i.product)}"><div class="iname">${esc(i.product)}</div>
     <input type="number" inputmode="decimal" data-f="qty" value="${i.qty ?? 1}" min="0" placeholder="шт."><input type="number" inputmode="numeric" data-f="amount" value="${i.amount ?? ''}" placeholder="Сумма, сум">
     <button data-act="delitem" aria-label="Убрать">×</button>
-    ${hasInk(i.product) ? `<div class="inks">${Object.entries(INKS).map(([k, c]) =>
+    ${hasInk(i.product) ? `<div class="inks"><span class="hint">Siyoh rangi:</span>${Object.entries(INKS).map(([k, c]) =>
       `<button class="ink ${k === i.ink ? 'on' : ''}" data-act="ink" data-v="${k}"><i style="background:${c}"></i>${k}</button>`).join('')}</div>` : ''}</div>`;
   function deliveryFields(type, o) {
     if (type === 'Самовывоз') return '<p class="hint" style="margin:10px 2px 0">Клиент заберёт заказ сам.</p>';
@@ -825,7 +825,7 @@
         ink: r.querySelector('.ink.on')?.dataset.v || null }));
       if (!items.length) return toast('Отметьте хотя бы один продукт');
       const noInk = items.find((i) => hasInk(i.product) && !i.ink);
-      if (noInk) return toast(`Выберите цвет краски для ${noInk.product}`);
+      if (noInk) return toast(`${noInk.product}: siyoh rangini tanlang`);
       if (items.some((i) => !(Number(i.amount) > 0)) && !(await ask('У некоторых продуктов не указана сумма. Сохранить так?'))) return;
       if (!order.client && !order.company && !order.phone) return toast('Укажите клиента, компанию или телефон');
       if (isOwner() && !order.manager_code) return toast('Выберите менеджера');
