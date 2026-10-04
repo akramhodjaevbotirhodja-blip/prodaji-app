@@ -30,7 +30,7 @@
     designers: ['1A', 'IK', 'F', 'N', 'Zu', 'Lu', 'AS', 'AD', 'AO', 'AB', 'R'].map((code) => ({ code, active: true })),
     sources: ['Instagram', '1 Pechat', '2 Botir', 'Повторный клиент', 'Рекомендация', 'Сайт', 'Звонок', 'Другое'].map((name) => ({ name, active: true })),
     products: ['Печать автомат', 'Печать пластик', 'Печать металл', 'Штамп', 'Датер / нумератор', 'Табличка', 'Бейдж', 'Наклейка',
-      'Сертификат', 'Визитка', 'Баннер', 'Логотип / дизайн', 'Подушка / краска', 'Пакеты', 'Другое'].map((name) => ({ name, active: true })),
+      'Сертификат', 'Визитка', 'Баннер', 'Логотип / дизайн', 'Подушка / краска', 'Пакеты', 'Другое'].map((name) => ({ name, active: true, ink: /^(Печать|Штамп|Датер)/.test(name) })),
     stages: STAGES,
     expense_categories: ['Материалы', 'Реклама', 'Зарплата', 'Аренда', 'Доставка', 'Коммунальные', 'Налоги', 'Прочее'].map((name) => ({ name, active: true })),
   };
@@ -66,7 +66,7 @@
       const sum = (arr, m) => arr.filter((p) => !m || p.method === m).reduce((s, p) => s + p.amount, 0);
       const total = sum(items), paid = sum(pays), rest = total - paid;
       const pay_status = o.stage === 'Отменён' ? 'Отменён' : paid === 0 && total > 0 ? 'Не оплачено' : rest > 0 ? 'Частично' : 'Оплачено';
-      return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount }) => ({ product, qty, amount })),
+      return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount, ink }) => ({ product, qty, amount, ink })),
         paid_click: sum(pays, 'click'), paid_card: sum(pays, 'card'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
     };
     const find = (id) => {
@@ -107,7 +107,7 @@
         let id = Number(p.order.id);
         if (id) { Object.assign(find(id), row); db.items = db.items.filter((i) => i.order_id !== id); }
         else { id = ++seq.o; db.orders.push({ ...row, id, stage: row.stage || STAGES[0] }); }
-        items.forEach((i) => db.items.push({ order_id: id, product: i.product, qty: Number(i.qty) || 1, amount: Number(i.amount) || 0 }));
+        items.forEach((i) => db.items.push({ order_id: id, product: i.product, qty: Number(i.qty) || 1, amount: Number(i.amount) || 0, ink: i.ink || null }));
         if (p.payment && Number(p.payment.amount) > 0) A.payment_add({ order_id: id, ...p.payment });
         return A.order({ id });
       },

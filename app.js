@@ -105,6 +105,11 @@
   // этапы: семь рабочих по порядку + «Отменён» отдельно
   const CANCEL = 'Отменён';
   const CLOSED = 'Сделка закрыта';
+  // цвет краски печати / штампа (у продукта в справочнике ink = true)
+  const INKS = { 'Синий': '#1e5bd8', 'Чёрный': '#111', 'Красный': '#d62828', 'Зелёный': '#1f9d48', 'Розовый': '#e85aa8' };
+  const hasInk = (name) => S.dicts.products.some((p) => p.name === name && p.ink);
+  const inkDot = (ink) => (ink ? ` <span class="hint"><i class="dot" style="background:${INKS[ink] || '#999'}"></i>${esc(ink)}</span>` : '');
+  const closeDebtMsg = (rest) => `Нельзя закрыть сделку: остаток долга ${money(rest)} сум. Сначала внесите оплату.`;
   const flow = () => S.dicts.stages.filter((s) => s !== CANCEL);
   const stageNo = (o) => flow().indexOf(o.stage) + 1;
   const pips = (o) => {
@@ -628,7 +633,7 @@
         ${stepper(o)}
         <div class="list">${info}</div>
         <h2>Продукты</h2>
-        <div class="card">${o.items.map((i) => `<div class="total-line"><span>${esc(i.product)} ×${i.qty}</span><span>${money(i.amount)}</span></div>`).join('')}
+        <div class="card">${o.items.map((i) => `<div class="total-line"><span>${esc(i.product)} ×${i.qty}${inkDot(i.ink)}</span><span>${money(i.amount)}</span></div>`).join('')}
           <div class="total-line big"><span>Итого</span><span>${money(o.total)} сум</span></div>
           <div class="total-line"><span class="green">Оплачено</span><span class="green">${money(o.paid)}</span></div>
           <div class="total-line"><span class="${o.rest > 0 ? 'red' : 'green'}"><b>Остаток</b></span><span class="${o.rest > 0 ? 'red' : 'green'}"><b>${money(o.rest)}</b></span></div></div>
@@ -715,7 +720,9 @@
   };
   const itemHtml = (i) => `<div class="item" data-product="${esc(i.product)}"><div class="iname">${esc(i.product)}</div>
     <input type="number" inputmode="decimal" data-f="qty" value="${i.qty ?? 1}" min="0" placeholder="шт."><input type="number" inputmode="numeric" data-f="amount" value="${i.amount ?? ''}" placeholder="Сумма, сум">
-    <button data-act="delitem" aria-label="Убрать">×</button></div>`;
+    <button data-act="delitem" aria-label="Убрать">×</button>
+    ${hasInk(i.product) ? `<div class="inks">${Object.entries(INKS).map(([k, c]) =>
+      `<button class="ink ${k === i.ink ? 'on' : ''}" data-act="ink" data-v="${k}"><i style="background:${c}"></i>${k}</button>`).join('')}</div>` : ''}</div>`;
   function deliveryFields(type, o) {
     if (type === 'Самовывоз') return '<p class="hint" style="margin:10px 2px 0">Клиент заберёт заказ сам.</p>';
     return `${type === 'Область' ? `<label>Область</label><select name="delivery_region">${opts(REGIONS, o.delivery_region, 'Выберите область')}</select>` : ''}
@@ -794,6 +801,7 @@
       refreshPick();
     },
     delitem: (el) => { el.closest('.item').remove(); refreshPick(); },
+    ink: (el) => el.parentNode.querySelectorAll('.ink').forEach((b) => b.classList.toggle('on', b === el)),
     seg: (el) => {
       el.parentNode.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el));
       if (el.parentNode.dataset.seg === 'dtype') {
@@ -813,8 +821,11 @@
       if (order.delivery_type === 'Область' && !order.delivery_region) return toast('Выберите область доставки');
       if (order.delivery_type === 'Область' && !order.delivery_service) return toast('Выберите, чем отправляем (BTS, EMU…)');
       const items = itemRows().map((r) => ({
-        product: r.dataset.product, qty: r.querySelector('[data-f=qty]').value, amount: r.querySelector('[data-f=amount]').value }));
+        product: r.dataset.product, qty: r.querySelector('[data-f=qty]').value, amount: r.querySelector('[data-f=amount]').value,
+        ink: r.querySelector('.ink.on')?.dataset.v || null }));
       if (!items.length) return toast('Отметьте хотя бы один продукт');
+      const noInk = items.find((i) => hasInk(i.product) && !i.ink);
+      if (noInk) return toast(`Выберите цвет краски для ${noInk.product}`);
       if (items.some((i) => !(Number(i.amount) > 0)) && !(await ask('У некоторых продуктов не указана сумма. Сохранить так?'))) return;
       if (!order.client && !order.company && !order.phone) return toast('Укажите клиента, компанию или телефон');
       if (isOwner() && !order.manager_code) return toast('Выберите менеджера');
@@ -822,6 +833,10 @@
       const payment = fp && Number(fp.value) > 0 ? { method: segVal('method'), amount: Number(fp.value), paid_at: order.order_date,
         paid_time: document.getElementById('firstPayTime').value, receipt: S.receipt } : null;
       if (S.receipt && !payment) return toast('Чек прикреплён — укажите сумму предоплаты');
+      if (order.stage === CLOSED && v.data.stage !== CLOSED) {
+        const rest = items.reduce((s, i) => s + (Number(i.amount) || 0), 0) - (Number(v.data.paid) || 0) - (payment ? payment.amount : 0);
+        if (rest > 0) return toast(closeDebtMsg(rest));
+      }
       el.disabled = true;
       const design = S.design;
       try {
@@ -845,6 +860,7 @@
     async stage(el) {
       const v = S.stack[S.stack.length - 1], s = el.dataset.v;
       if (s === v.data.stage) return;
+      if (s === CLOSED && v.data.rest > 0) { haptic('error'); return toast(closeDebtMsg(v.data.rest)); }
       if (s === CANCEL && !(await ask(`Отменить заказ №${v.id}?`))) return;
       await call('order_stage', { id: v.id, stage: s }); haptic('success'); toast('Этап: ' + s); render();
     },
