@@ -107,6 +107,7 @@
   const CLOSED = 'Сделка закрыта';
   // цвет краски печати / штампа (у продукта в справочнике ink = true)
   const INKS = { "Ko'k": '#1e5bd8', 'Qora': '#111', 'Qizil': '#d62828', 'Yashil': '#1f9d48', 'Pushti': '#e85aa8' };
+  const INK_DEFAULT = "Ko'k"; // обычный цвет — выбран сразу, в Google-таблицу не пишется
   const hasInk = (name) => S.dicts.products.some((p) => p.name === name && p.ink);
   const inkDot = (ink) => (ink ? ` <span class="hint"><i class="dot" style="background:${INKS[ink] || '#999'}"></i>${esc(ink)}</span>` : '');
   const closeDebtMsg = (rest) => `Нельзя закрыть сделку: остаток долга ${money(rest)} сум. Сначала внесите оплату.`;
@@ -722,7 +723,7 @@
     <input type="number" inputmode="decimal" data-f="qty" value="${i.qty ?? 1}" min="0" placeholder="шт."><input type="number" inputmode="numeric" data-f="amount" value="${i.amount ?? ''}" placeholder="Сумма, сум">
     <button data-act="delitem" aria-label="Убрать">×</button>
     ${hasInk(i.product) ? `<div class="inks"><span class="hint">Siyoh rangi:</span>${Object.entries(INKS).map(([k, c]) =>
-      `<button class="ink ${k === i.ink ? 'on' : ''}" data-act="ink" data-v="${k}"><i style="background:${c}"></i>${k}</button>`).join('')}</div>` : ''}</div>`;
+      `<button class="ink ${k === (i.ink || INK_DEFAULT) ? 'on' : ''}" data-act="ink" data-v="${k}"><i style="background:${c}"></i>${k}</button>`).join('')}</div>` : ''}</div>`;
   function deliveryFields(type, o) {
     if (type === 'Самовывоз') return '<p class="hint" style="margin:10px 2px 0">Клиент заберёт заказ сам.</p>';
     return `${type === 'Область' ? `<label>Область</label><select name="delivery_region">${opts(REGIONS, o.delivery_region, 'Выберите область')}</select>` : ''}
