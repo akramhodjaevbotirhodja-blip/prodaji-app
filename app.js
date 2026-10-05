@@ -177,12 +177,14 @@
   const TABS = {
     async orders() {
       const f = S.filters;
-      const list = await cached('orders', range(f.period));
-      const q = f.q.trim().toLowerCase();
+      const q = f.q.trim().toLowerCase().replace(/^№\s*/, '');
+      // поиск идёт по всем датам: нужный заказ мог быть в прошлом месяце
+      const list = await cached('orders', q ? {} : range(f.period));
       // закрытые сделки живут в «Клиентах»: здесь — только если выбран их этап или ищем
       const rows = list.filter((o) => (o.stage !== CLOSED || f.stage === CLOSED || q) &&
         STATUS_FILTERS[f.status](o) && (f.stage === 'all' || o.stage === f.stage) &&
-        (!q || [o.client, o.company, o.phone, String(o.id)].some((v) => String(v || '').toLowerCase().includes(q))));
+        (!q || [o.client, o.company, o.phone, String(o.id)].some((v) => String(v || '').toLowerCase().includes(q))))
+        .sort((a, b) => (String(b.id) === q) - (String(a.id) === q)); // точный номер — первым
       const sum = rows.filter((o) => o.stage !== 'Отменён').reduce((s, o) => s + o.total, 0);
       return `<h1>Заказы</h1>
         ${chips('period', periods, f.period)}
@@ -192,7 +194,7 @@
           return [s, `${no ? no + '. ' : ''}${esc(s)} · ${n}`];
         })) }, f.stage)}
         <input class="search" type="search" placeholder="Поиск: клиент, компания, телефон, №" value="${esc(f.q)}" data-input="q">
-        <div class="hint" style="margin:0 6px 8px">${rows.length} заказов · ${money(sum)} сум</div>
+        <div class="hint" style="margin:0 6px 8px">${rows.length} заказов · ${money(sum)} сум${q ? ' · поиск за всё время' : ''}</div>
         <div class="list">${rows.map(orderRow).join('') || '<div class="center hint">Заказов нет</div>'}</div>
         <button class="fab" data-act="new" aria-label="Новый заказ">+</button>`;
     },
