@@ -802,7 +802,13 @@
       refreshPick();
     },
     delitem: (el) => { el.closest('.item').remove(); refreshPick(); },
-    ink: (el) => el.parentNode.querySelectorAll('.ink').forEach((b) => b.classList.toggle('on', b === el)),
+    // свёрнуто — видна только выбранная краска; нажали — раскрыли все, выбрали — снова свернули
+    ink: (el) => {
+      const box = el.parentNode;
+      if (!box.classList.contains('open')) return box.classList.add('open');
+      box.querySelectorAll('.ink').forEach((b) => b.classList.toggle('on', b === el));
+      box.classList.remove('open');
+    },
     seg: (el) => {
       el.parentNode.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el));
       if (el.parentNode.dataset.seg === 'dtype') {
