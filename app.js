@@ -16,6 +16,15 @@
   // ---------- утилиты ----------
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const money = (n) => Math.round(Number(n) || 0).toLocaleString('ru-RU').replace(/,/g, ' ');
+  // суммы вводятся в тысячах (50 → 50 000 сум), в базе — полные суммы
+  const kIn = (n) => (n == null || n === '' ? '' : +(Number(n) / 1000).toFixed(3));
+  const kOut = (v) => Math.round((Number(v) || 0) * 1000);
+  const K_LABEL = 'Сумма, тыс. сум';
+  // по привычке вписали полную сумму (50000 → 50 млн) — переспрашиваем
+  const bigOk = async (sums) => {
+    const big = sums.find((s) => s >= 20e6);
+    return !big || ask(`Сумма ${money(big)} сум. Суммы теперь вводятся в тысячах: 50 = 50 000. Всё верно?`);
+  };
   const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
   const today = () => iso(new Date());
   const nowTime = () => new Date().toTimeString().slice(0, 5); // «14:35» — по умолчанию время оплаты
@@ -223,7 +232,7 @@
               .map(([k, t]) => `<button class="chip ${String(k) === String(to) ? 'on' : ''}" data-act="payto" data-v="${k}">${esc(t)}</button>`).join('')}</div>` : ''}
             <div id="newPay" ${to === 'new' ? '' : 'hidden'}>
               ${segHtml('method', 'click')}
-              <label>Сумма</label><input type="number" inputmode="numeric" placeholder="Сумма" value="${o.rest > 0 ? o.rest : ''}" id="payAmount">
+              <label>${K_LABEL}</label><input type="number" inputmode="decimal" placeholder="50 = 50 000" value="${o.rest > 0 ? kIn(o.rest) : ''}" id="payAmount">
               <div class="grid2"><div><label>Дата оплаты</label><input type="date" value="${today()}" id="payDate"></div>
               <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="payTime"></div></div></div></div>`;
       } else {
@@ -616,7 +625,7 @@
       return `<h1>${e.id ? 'Расход' : 'Новый расход'}</h1>
         <div class="card">
           <label style="margin-top:0">Вид расхода</label><select id="exCat">${opts(cats, e.category, 'Выберите')}</select>
-          <div class="grid2"><div><label>Сумма</label><input type="number" inputmode="numeric" id="exAmount" value="${e.amount ?? ''}" placeholder="0"></div>
+          <div class="grid2"><div><label>${K_LABEL}</label><input type="number" inputmode="decimal" id="exAmount" value="${kIn(e.amount)}" placeholder="50 = 50 000"></div>
           <div><label>Дата</label><input type="date" id="exDate" value="${e.spent_at}"></div></div>
           <label>Чем платили</label>${segHtml('exmethod', e.method)}
           <label>Комментарий</label><input id="exComment" value="${esc(e.comment)}" placeholder="например: бумага, 5 пачек" autocomplete="off">
@@ -649,7 +658,7 @@
           <div class="amt">${money(p.amount)}</div>${isOwner() ? `<button class="btn sm danger" data-act="paydel" data-id="${p.id}">✕</button>` : ''}</div>`).join('') || '<div class="row hint">Оплат пока нет</div>'}</div>
         ${o.rest > 0 && o.stage !== 'Отменён' ? `<div class="card" style="margin-top:8px"><b>Добавить оплату</b>
           ${segHtml('method', 'click')}
-          <label>Сумма</label><input type="number" inputmode="numeric" placeholder="Сумма" value="${o.rest}" id="payAmount">
+          <label>${K_LABEL}</label><input type="number" inputmode="decimal" placeholder="50 = 50 000" value="${kIn(o.rest)}" id="payAmount">
           <div class="grid2"><div><label>Дата оплаты</label><input type="date" value="${today()}" id="payDate"></div>
           <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="payTime"></div></div>
           ${receiptPicker()}
@@ -688,7 +697,7 @@
           <div id="items">${(o.items || []).map(itemHtml).join('')}</div>
           <div class="total-line big" style="margin-top:8px"><span>Итого</span><span id="formTotal">0</span></div></div>
         ${o.payments?.length ? '' : `<h2>Предоплата</h2><div class="card">${segHtml('method', 'click')}
-          <div class="grid2"><div><label>Сумма</label><input type="number" inputmode="numeric" placeholder="Можно пусто" id="firstPay"></div>
+          <div class="grid2"><div><label>${K_LABEL}</label><input type="number" inputmode="decimal" placeholder="Можно пусто" id="firstPay"></div>
           <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="firstPayTime"></div></div>
           ${receiptPicker()}</div>`}
         <h2>Утверждённый дизайн</h2><div class="card">${designPicker()}</div>
@@ -724,7 +733,7 @@
       `<button class="chip ${chosen.has(p.name) ? 'on' : ''}" data-act="pick" data-v="${esc(p.name)}">${chosen.has(p.name) ? '✓ ' : ''}${esc(p.name)}</button>`).join('');
   };
   const itemHtml = (i) => `<div class="item" data-product="${esc(i.product)}"><div class="iname">${esc(i.product)}</div>
-    <input type="number" inputmode="decimal" data-f="qty" value="${i.qty ?? 1}" min="0" placeholder="шт."><input type="number" inputmode="numeric" data-f="amount" value="${i.amount ?? ''}" placeholder="Сумма, сум">
+    <input type="number" inputmode="decimal" data-f="qty" value="${i.qty ?? 1}" min="0" placeholder="шт."><input type="number" inputmode="decimal" data-f="amount" value="${kIn(i.amount)}" placeholder="тыс. сум">
     <button data-act="delitem" aria-label="Убрать">×</button>
     ${hasInk(i.product) ? `<div class="inks"><span class="hint">Siyoh rangi:</span>${Object.entries(INKS).map(([k, c]) =>
       `<button class="ink ${k === (i.ink || INK_DEFAULT) ? 'on' : ''}" data-act="ink" data-v="${k}"><i style="background:${c}"></i>${k}</button>`).join('')}</div>` : ''}</div>`;
@@ -748,7 +757,7 @@
   }
   function recalcForm() {
     const el = document.getElementById('formTotal'); if (!el) return;
-    el.textContent = money([...document.querySelectorAll('#items [data-f=amount]')].reduce((s, x) => s + (Number(x.value) || 0), 0)) + ' сум';
+    el.textContent = money([...document.querySelectorAll('#items [data-f=amount]')].reduce((s, x) => s + kOut(x.value), 0)) + ' сум';
   }
   const segVal = (name) => { const b = document.querySelector(`[data-seg=${name}] .on`); return b && b.dataset.v; };
 
@@ -775,10 +784,11 @@
     },
     async exsave(el) {
       const v = S.stack[S.stack.length - 1];
-      const row = { id: v.data?.id, category: document.getElementById('exCat').value, amount: Number(document.getElementById('exAmount').value),
+      const row = { id: v.data?.id, category: document.getElementById('exCat').value, amount: kOut(document.getElementById('exAmount').value),
         spent_at: document.getElementById('exDate').value, method: segVal('exmethod'), comment: document.getElementById('exComment').value };
       if (!row.category) return toast('Выберите вид расхода');
       if (!(row.amount > 0)) return toast('Введите сумму');
+      if (!(await bigOk([row.amount]))) return;
       el.disabled = true;
       try { await call('expense_save', row); haptic('success'); toast('Расход сохранён'); pop(); }
       catch { el.disabled = false; }
@@ -832,7 +842,7 @@
       if (order.delivery_type === 'Область' && !order.delivery_region) return toast('Выберите область доставки');
       if (order.delivery_type === 'Область' && !order.delivery_service) return toast('Выберите, чем отправляем (BTS, EMU…)');
       const items = itemRows().map((r) => ({
-        product: r.dataset.product, qty: r.querySelector('[data-f=qty]').value, amount: r.querySelector('[data-f=amount]').value,
+        product: r.dataset.product, qty: r.querySelector('[data-f=qty]').value, amount: kOut(r.querySelector('[data-f=amount]').value),
         ink: r.querySelector('.ink.on')?.dataset.v || null }));
       if (!items.length) return toast('Отметьте хотя бы один продукт');
       const noInk = items.find((i) => hasInk(i.product) && !i.ink);
@@ -841,9 +851,10 @@
       if (!order.client && !order.company && !order.phone) return toast('Укажите клиента, компанию или телефон');
       if (isOwner() && !order.manager_code) return toast('Выберите менеджера');
       const fp = document.getElementById('firstPay');
-      const payment = fp && Number(fp.value) > 0 ? { method: segVal('method'), amount: Number(fp.value), paid_at: order.order_date,
+      const payment = fp && Number(fp.value) > 0 ? { method: segVal('method'), amount: kOut(fp.value), paid_at: order.order_date,
         paid_time: document.getElementById('firstPayTime').value, receipt: S.receipt } : null;
       if (S.receipt && !payment) return toast('Чек прикреплён — укажите сумму предоплаты');
+      if (!(await bigOk([...items.map((i) => i.amount), payment ? payment.amount : 0]))) return;
       if (order.stage === CLOSED && v.data.stage !== CLOSED) {
         const rest = items.reduce((s, i) => s + (Number(i.amount) || 0), 0) - (Number(v.data.paid) || 0) - (payment ? payment.amount : 0);
         if (rest > 0) return toast(closeDebtMsg(rest));
@@ -861,8 +872,9 @@
     },
     async payadd(el) {
       const v = S.stack[S.stack.length - 1];
-      const amount = Number(document.getElementById('payAmount').value);
+      const amount = kOut(document.getElementById('payAmount').value);
       if (!(amount > 0)) return toast('Введите сумму');
+      if (!(await bigOk([amount]))) return;
       if (amount > v.data.rest && !(await ask(`Сумма больше остатка (${money(v.data.rest)}). Всё равно сохранить?`))) return;
       el.disabled = true;
       try { await call('payment_add', { order_id: v.id, method: segVal('method'), amount, paid_at: document.getElementById('payDate').value, paid_time: document.getElementById('payTime').value, receipt: S.receipt }); haptic('success'); toast('Оплата добавлена'); render(); }
@@ -1005,8 +1017,9 @@
       if (!P.orderId) return toast('Выберите заказ');
       let pay = null;
       if (P.receipt && (!P.payTo || P.payTo === 'new')) {
-        const amount = Number(document.getElementById('payAmount').value);
+        const amount = kOut(document.getElementById('payAmount').value);
         if (!(amount > 0)) return toast('Введите сумму оплаты по чеку');
+        if (!(await bigOk([amount]))) return;
         const o = await cached('order', { id: P.orderId });
         if (amount > o.rest && !(await ask(`Сумма больше остатка (${money(o.rest)}). Всё равно сохранить?`))) return;
         pay = { order_id: P.orderId, method: segVal('method'), amount, receipt: P.receipt,
