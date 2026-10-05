@@ -76,6 +76,8 @@
     return `<span class="badge b-red">−${money(o.rest)}</span>`;
   };
   const AMO = 'https://gano2010.amocrm.ru/leads/detail/';
+  // название заказа — имя клиента, как в amoCRM; компания (текст печати) — только если клиента нет
+  const orderName = (o) => o.client || o.company || o.phone || 'Без имени';
   const isInstagram = (source) => /^instagram/i.test(source || '');
   // «@nik» или «nik» → ссылка на профиль; готовую ссылку оставляем как есть
   const igUrl = (s) => (/^https?:\/\//i.test(s) ? s : 'https://instagram.com/' + String(s).replace(/^@/, '').trim());
@@ -282,7 +284,7 @@
         <div class="list">${list.map((o) => {
           const d = daysAgo(o.order_date);
           return `<div class="row tap" data-act="open" data-id="${o.id}">
-            <div class="grow"><div class="title">${esc(o.company || o.client || o.phone || 'Без имени')}</div>
+            <div class="grow"><div class="title">${esc(orderName(o))}</div>
             <div class="sub">№${o.id} · ${esc(o.manager_code || '—')} · ${esc(o.phone || '')}</div></div>
             <div class="amt"><div class="red"><b>${money(o.rest)}</b></div>
             <span class="badge ${d > 7 ? 'b-red' : 'b-grey'}">${d === 0 ? 'сегодня' : d + ' дн.'}</span></div></div>`;
@@ -362,7 +364,7 @@
   };
 
   const orderRow = (o) => `<div class="row tap" data-act="open" data-id="${o.id}">
-    <div class="grow"><div class="title">${esc(o.company || o.client || o.phone || 'Без имени')}</div>
+    <div class="grow"><div class="title">${esc(orderName(o))}</div>
     <div class="sub">№${o.id} · ${fmtDate(o.order_date)} · ${esc(o.manager_code || '—')} · ${esc(products(o))}</div>
     ${deliveryText(o) ? `<div class="sub">${esc(deliveryText(o))}${o.tracking ? ' · трек ' + esc(o.tracking) : ''}</div>` : ''}
     ${pips(o)}</div>
@@ -637,13 +639,13 @@
     async order(v) {
       const o = (v.data = await call('order', { id: v.id }, { quiet: true }));
       const info = [['Дата', fmtDate(o.order_date)], ['Менеджер', o.manager_code], ['Дизайнер', o.designer_code], ['Источник', o.source],
-        ['Клиент', o.client], ['Телефон', o.phone ? `<a href="tel:${esc(o.phone.replace(/\s/g, ''))}">${esc(o.phone)}</a>` : ''],
+        ['Клиент', o.client], ['Компания', o.client ? o.company : ''], ['Телефон', o.phone ? `<a href="tel:${esc(o.phone.replace(/\s/g, ''))}">${esc(o.phone)}</a>` : ''],
         ['Доставка', [DELIVERY[o.delivery_type], o.delivery_region, o.delivery_service].filter(Boolean).join(' · ')],
         ['Адрес', o.delivery], ['Трек-номер', o.tracking], ['Комментарий', o.comment],
         ['Instagram', o.instagram ? `<a href="${esc(igUrl(o.instagram))}" data-act="link">${esc(o.instagram)}</a>` : ''],
         ['amoCRM', o.amo_lead_id ? `<a href="${AMO + o.amo_lead_id}" data-act="link">сделка ${o.amo_lead_id}</a>` : '']]
         .filter(([, x]) => x).map(([k, x]) => `<div class="row"><span class="hint" style="width:96px;flex:none">${k}</span><span class="grow">${['Телефон', 'Instagram', 'amoCRM'].includes(k) ? x : esc(x)}</span></div>`).join('');
-      return `<h1>№${o.id} · ${esc(o.company || o.client || 'Заказ')}</h1>
+      return `<h1>№${o.id} · ${esc(orderName(o))}</h1>
         ${stepper(o)}
         <div class="list">${info}</div>
         <h2>Продукты</h2>
