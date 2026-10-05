@@ -473,9 +473,11 @@
         || [me.client, me.company].some((x) => nm(x) && !/^\(.*\)$/.test(x.trim()) && [o.client, o.company].some((y) => nm(y) === nm(x)));
       const others = list.filter((o) => o.id !== me.id);
       const similar = others.filter(same);
-      const q = (S.mergeQ || '').trim().toLowerCase();
+      const q = (S.mergeQ || '').trim().toLowerCase().replace(/^№\s*/, '');
+      // точный номер заказа — первым, иначе «15» тонет среди №115, №1500…
       const found = q ? others.filter((o) => !similar.includes(o) &&
-        [o.client, o.company, o.phone, o.instagram, String(o.id)].some((x) => String(x || '').toLowerCase().includes(q))).slice(0, 30) : [];
+        [o.client, o.company, o.phone, o.instagram, String(o.id)].some((x) => String(x || '').toLowerCase().includes(q)))
+        .sort((a, b) => (String(b.id) === q) - (String(a.id) === q)).slice(0, 30) : [];
       const pickRow = (o) => orderRow(o).replace('data-act="open"', `data-act="mergepick"`);
       return `<h1>Объединить с №${me.id}</h1>
         <p class="hint" style="margin:0 6px 10px">Выберите второй заказ этого клиента. Его продукты и оплаты перейдут в №${me.id},
