@@ -27,6 +27,9 @@
   };
   const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
   const today = () => iso(new Date());
+  // дата оплаты: по умолчанию — день, когда вносят в приложение; можно поставить раньше, но не позже
+  const payDateField = (id) => `<input type="date" value="${today()}" max="${today()}" id="${id}">`;
+  const payDateBad = (d) => (!d ? 'Укажите дату оплаты' : d > today() ? 'Дата оплаты не может быть позже сегодняшней' : '');
   const nowTime = () => new Date().toTimeString().slice(0, 5); // «14:35» — по умолчанию время оплаты
   const addDays = (s, n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return iso(d); };
   const fmtDate = (s) => (s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '');
@@ -235,7 +238,7 @@
             <div id="newPay" ${to === 'new' ? '' : 'hidden'}>
               ${segHtml('method', 'click')}
               <label>${K_LABEL}</label><input type="number" inputmode="decimal" placeholder="50 = 50 000" value="${o.rest > 0 ? kIn(o.rest) : ''}" id="payAmount">
-              <div class="grid2"><div><label>Дата оплаты</label><input type="date" value="${today()}" id="payDate"></div>
+              <div class="grid2"><div><label>Дата оплаты</label>${payDateField('payDate')}</div>
               <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="payTime"></div></div></div></div>`;
       } else {
         const list = await cached('orders', {});
@@ -661,7 +664,7 @@
         ${o.rest > 0 && o.stage !== 'Отменён' ? `<div class="card" style="margin-top:8px"><b>Добавить оплату</b>
           ${segHtml('method', 'click')}
           <label>${K_LABEL}</label><input type="number" inputmode="decimal" placeholder="50 = 50 000" value="${kIn(o.rest)}" id="payAmount">
-          <div class="grid2"><div><label>Дата оплаты</label><input type="date" value="${today()}" id="payDate"></div>
+          <div class="grid2"><div><label>Дата оплаты</label>${payDateField('payDate')}</div>
           <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="payTime"></div></div>
           ${receiptPicker()}
           <button class="btn" data-act="payadd">Сохранить оплату</button></div>` : ''}
@@ -699,7 +702,8 @@
           <div id="items">${(o.items || []).map(itemHtml).join('')}</div>
           <div class="total-line big" style="margin-top:8px"><span>Итого</span><span id="formTotal">0</span></div></div>
         ${o.payments?.length ? '' : `<h2>Предоплата</h2><div class="card">${segHtml('method', 'click')}
-          <div class="grid2"><div><label>${K_LABEL}</label><input type="number" inputmode="decimal" placeholder="Можно пусто" id="firstPay"></div>
+          <label>${K_LABEL}</label><input type="number" inputmode="decimal" placeholder="Можно пусто" id="firstPay">
+          <div class="grid2"><div><label>Дата оплаты</label>${payDateField('firstPayDate')}</div>
           <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="firstPayTime"></div></div>
           ${receiptPicker()}</div>`}
         <h2>Утверждённый дизайн</h2><div class="card">${designPicker()}</div>
@@ -853,8 +857,9 @@
       if (!order.client && !order.company && !order.phone) return toast('Укажите клиента, компанию или телефон');
       if (isOwner() && !order.manager_code) return toast('Выберите менеджера');
       const fp = document.getElementById('firstPay');
-      const payment = fp && Number(fp.value) > 0 ? { method: segVal('method'), amount: kOut(fp.value), paid_at: order.order_date,
-        paid_time: document.getElementById('firstPayTime').value, receipt: S.receipt } : null;
+      const payment = fp && Number(fp.value) > 0 ? { method: segVal('method'), amount: kOut(fp.value),
+        paid_at: document.getElementById('firstPayDate').value, paid_time: document.getElementById('firstPayTime').value, receipt: S.receipt } : null;
+      if (payment && payDateBad(payment.paid_at)) return toast(payDateBad(payment.paid_at));
       if (S.receipt && !payment) return toast('Чек прикреплён — укажите сумму предоплаты');
       if (!(await bigOk([...items.map((i) => i.amount), payment ? payment.amount : 0]))) return;
       if (order.stage === CLOSED && v.data.stage !== CLOSED) {
@@ -877,6 +882,7 @@
       const amount = kOut(document.getElementById('payAmount').value);
       if (!(amount > 0)) return toast('Введите сумму');
       if (!(await bigOk([amount]))) return;
+      if (payDateBad(document.getElementById('payDate').value)) return toast(payDateBad(document.getElementById('payDate').value));
       if (amount > v.data.rest && !(await ask(`Сумма больше остатка (${money(v.data.rest)}). Всё равно сохранить?`))) return;
       el.disabled = true;
       try { await call('payment_add', { order_id: v.id, method: segVal('method'), amount, paid_at: document.getElementById('payDate').value, paid_time: document.getElementById('payTime').value, receipt: S.receipt }); haptic('success'); toast('Оплата добавлена'); render(); }
@@ -1026,6 +1032,7 @@
         if (amount > o.rest && !(await ask(`Сумма больше остатка (${money(o.rest)}). Всё равно сохранить?`))) return;
         pay = { order_id: P.orderId, method: segVal('method'), amount, receipt: P.receipt,
           paid_at: document.getElementById('payDate').value, paid_time: document.getElementById('payTime').value };
+        if (payDateBad(pay.paid_at)) return toast(payDateBad(pay.paid_at));
       }
       el.disabled = true;
       try {
