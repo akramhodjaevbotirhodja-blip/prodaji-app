@@ -180,7 +180,7 @@
   if (tg) tg.BackButton.onClick(pop);
 
   async function render() {
-    S.receipt = null; S.designs = []; // выбранные картинки живут только на текущем экране
+    S.receipt = null; S.designs = []; S.clientHint = null; // выбранные картинки живут только на текущем экране
     const view = S.stack[S.stack.length - 1];
     S.pz = 'receipt'; // Ctrl+V идёт в чек; если поля чека нет (заказ оплачен) — paintPz переключит на дизайн
     $tabs.hidden = !!view && view.type === 'form';
@@ -711,6 +711,7 @@
           <label>Клиент (имя / ник)</label><input name="client" value="${esc(o.client)}" autocomplete="off">
           <label>Компания / текст печати</label><input name="company" value="${esc(o.company)}" autocomplete="off">
           <label>Телефон</label><input name="phone" type="tel" value="${esc(o.phone)}" placeholder="90 123 45 67">
+          ${o.id ? '' : '<div class="card client-hint" id="clientHint" hidden></div>'}
           <label>Сделка в amoCRM (ссылка)</label><input name="amo_lead" value="${o.amo_lead_id ? esc(AMO + o.amo_lead_id) : ''}" placeholder="Вставьте ссылку, если по телефону не найдётся" autocomplete="off">
         </div>
         <h2>Продукты</h2>
@@ -1077,6 +1078,21 @@
     pclear: (el) => { if (el.dataset.v === 'design') S.paste.designs = []; else S.paste[el.dataset.v] = null; paintPaste(); },
     pdesignrm: (el) => { S.paste.designs.splice(Number(el.dataset.i), 1); paintPaste(); },
     designrm: (el) => { S.designs.splice(Number(el.dataset.i), 1); paintDesigns(); },
+    // данные повторного клиента — только в пустые поля, введённое оператором не трогаем
+    clientfill: (el) => {
+      const c = S.clientHint;
+      if (!c) return;
+      let n = 0;
+      ['client', 'company', 'instagram', 'source'].forEach((f) => {
+        const x = $app.querySelector(`[name=${f}]`);
+        if (!x || x.value || !c[f]) return;
+        if (x.tagName === 'SELECT' && ![...x.options].some((o) => o.value === c[f])) return; // источника уже нет в справочнике
+        x.value = c[f]; n++;
+      });
+      const src = $app.querySelector('[name=source]');
+      if (src) document.getElementById('igField').hidden = !isInstagram(src.value);
+      el.disabled = true; el.textContent = n ? '✓ Данные подставлены' : 'Поля уже заполнены';
+    },
     ppick: (el) => { Object.assign(S.paste, { orderId: Number(el.dataset.id), payTo: null }); render(); },
     punpick: () => { S.paste.orderId = null; render(); },
     payto: (el) => {
@@ -1161,9 +1177,26 @@
   window.addEventListener('pointerup', () => { setTimeout(() => { drag = null; }); });
   // после перетаскивания не нажимаем чип, на котором отпустили мышь
   $app.addEventListener('click', (e) => { if (drag?.moved) { e.stopPropagation(); e.preventDefault(); } }, true);
+  // Повторный клиент: в новом заказе по телефону показываем его прошлые заказы и даём подставить данные
+  async function clientLookup(input) {
+    const box = document.getElementById('clientHint');
+    if (!box) return;
+    const phone = input.value;
+    const c = phone9({ phone }).length === 9 ? await call('client_lookup', { phone }, { quiet: true }).catch(() => null) : null;
+    if (input.value !== phone || !box.isConnected) return; // пока ждали, телефон уже поменяли
+    S.clientHint = c;
+    box.hidden = !c;
+    if (!c) return;
+    box.innerHTML = `<div>🔁 <b>Постоянный клиент${c.client ? ': ' + esc(c.client) : ''}</b></div>
+      <div class="hint">${c.orders} зак.${c.closed ? ` (закрыто ${c.closed})` : ''} · последний ${fmtDate(c.last_date)} (№${c.last_id}) · всего ${money(c.total)} сум</div>
+      <button class="btn sm ghost" data-act="clientfill">Подставить данные клиента</button>`;
+  }
   $app.addEventListener('input', (e) => {
     const k = e.target.dataset.input;
     if (e.target.closest('#items')) recalcForm();
+    if (e.target.name === 'phone' && document.getElementById('clientHint')) {
+      clearTimeout(ACTS.ct); ACTS.ct = setTimeout(() => clientLookup(e.target), 400);
+    }
     if (k === 'q' || k === 'cq' || k === 'mq' || k === 'pq' || k === 'sq') {
       if (k === 'q') S.filters.q = e.target.value; else if (k === 'cq') S.clientQ = e.target.value;
       else if (k === 'pq') S.paste.q = e.target.value; else if (k === 'sq') S.stockQ = e.target.value; else S.mergeQ = e.target.value;

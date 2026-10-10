@@ -97,6 +97,17 @@
         .sort((a, b) => (b.order_date + String(b.id).padStart(9, '0')).localeCompare(a.order_date + String(a.id).padStart(9, '0'))),
       order: (p) => ({ ...view(find(p.id)), payments: db.payments.filter((x) => x.order_id === Number(p.id)),
         designs: db.designs.filter((x) => x.order_id === Number(p.id)) }),
+      // как client_by_phone в базе: прошлые заказы по последним 9 цифрам телефона
+      client_lookup: (p) => {
+        const p9 = (s) => String(s || '').replace(/\D/g, '').slice(-9);
+        if (p9(p.phone).length !== 9) return null;
+        const list = db.orders.filter((o) => p9(o.phone) === p9(p.phone)).map(view).sort((a, b) => b.id - a.id);
+        if (!list.length) return null;
+        const last = (f) => (list.find((o) => o[f]) || {})[f] || null;
+        return { orders: list.length, closed: list.filter((o) => o.stage === 'Сделка закрыта').length, last_id: list[0].id,
+          last_date: list.map((o) => o.order_date).sort().pop(), total: list.filter((o) => o.stage !== 'Отменён').reduce((s, o) => s + o.total, 0),
+          client: last('client'), company: last('company'), instagram: last('instagram'), source: last('source') };
+      },
       design_add: (p) => { find(p.order_id); db.designs.push({ id: seq.d++, order_id: Number(p.order_id), url: p.image }); return A.order({ id: p.order_id }); },
       design_delete: (p) => {
         const d = db.designs.find((x) => x.id === Number(p.id));
