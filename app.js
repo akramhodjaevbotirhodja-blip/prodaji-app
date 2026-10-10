@@ -874,7 +874,13 @@
         document.getElementById('dFields').innerHTML = deliveryFields(el.dataset.v, keep);
       }
     },
+    // кнопку блокируем сразу: проверки ниже ждут сервер, и второй клик успевал создать дубль заказа
     async save(el) {
+      if (el.disabled) return;
+      el.disabled = true;
+      try { await ACTS.saveOrder(); } finally { if (el.isConnected) el.disabled = false; }
+    },
+    async saveOrder() {
       const v = S.stack[S.stack.length - 1];
       const val = (n) => { const x = $app.querySelector(`[name=${n}]`); return x ? x.value : undefined; };
       const order = { id: v.data.id, order_date: val('order_date'), manager_code: val('manager_code'), designer_code: val('designer_code'),
@@ -908,13 +914,14 @@
       // вливаем новый в тот: клиент и сделка одна, оба дизайнера остаются в заказе.
       let twin = null;
       if (!v.data.id && phone9(order).length === 9) {
-        twin = (await cached('orders', {})).filter((o) => phone9(o) === phone9(order) && o.stage !== CLOSED && o.stage !== CANCEL)
+        // заказы за 60 дней, а не все 6000+: второй заказ того же клиента появляется в те же дни
+        twin = (await cached('orders', { from: iso(new Date(Date.now() - 60 * 864e5)) }))
+          .filter((o) => phone9(o) === phone9(order) && o.stage !== CLOSED && o.stage !== CANCEL)
           .sort((a, b) => b.id - a.id)[0] || null;
         // окно подтверждения в Telegram — не длиннее 256 символов
         if (twin && !(await ask(`Этот телефон уже есть в заказе №${twin.id} (${orderName(twin).slice(0, 40)}${twin.designer_code ? ', дизайнер ' + twin.designer_code : ''}). `
           + `Добавить новый заказ туда? Оба дизайнера останутся.`))) twin = null;
       }
-      el.disabled = true;
       const designs = S.designs.slice();
       try {
         const saved = await call('order_save', { order, items, payment });
@@ -931,7 +938,7 @@
           : into ? `Добавлено в заказ №${into}` : twin ? `Заказ сохранён отдельно (№${saved.id}) — объединить не удалось` : 'Заказ сохранён');
         S.stack = S.stack.filter((x) => x.type !== 'form' && !(x.type === 'order' && x.id === id));
         push({ type: 'order', id });
-      } catch { el.disabled = false; }
+      } catch { /* call уже показал ошибку; кнопку разблокирует save */ }
     },
     async payadd(el) {
       const v = S.stack[S.stack.length - 1];
