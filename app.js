@@ -38,6 +38,24 @@
   // window.confirm в Telegram Desktop не показывается и сразу возвращает false, поэтому спрашиваем через Telegram
   const ask = (msg) => new Promise((res) => (tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')
     ? tg.showConfirm(msg, res) : res(window.confirm(msg))));
+  // Вопрос со своими кнопками (у ask только OK / Отмена): окно внутри приложения, одинаковое в Telegram и браузере.
+  // buttons: [{ id, text, primary }]; возвращает id нажатой кнопки, null — закрыли (фон, Esc, «Отмена»).
+  function choose(msg, buttons) {
+    return new Promise((res) => {
+      const bg = document.createElement('div');
+      bg.className = 'modal-bg';
+      bg.innerHTML = `<div class="modal" role="dialog"><p>${esc(msg)}</p>${buttons.map((b, i) =>
+        `<button class="btn ${b.primary ? '' : 'ghost'}" data-i="${i}">${esc(b.text)}</button>`).join('')}</div>`;
+      const done = (id) => { bg.remove(); document.removeEventListener('keydown', onKey); res(id ?? null); };
+      const onKey = (e) => { if (e.key === 'Escape') done(null); };
+      bg.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-i]');
+        if (b) done(buttons[b.dataset.i].id); else if (e.target === bg) done(null);
+      });
+      document.addEventListener('keydown', onKey);
+      document.body.appendChild(bg);
+    });
+  }
   const haptic = (t) => tg && tg.HapticFeedback && tg.HapticFeedback.notificationOccurred(t);
   const periods = { today: 'Сегодня', week: '7 дней', month: 'Месяц', prev: 'Прошлый месяц', all: 'Всё время' };
   function range(p) {
@@ -534,6 +552,7 @@
           <div class="kpi"><div class="k">Заказов</div><div class="v">${c.orders.length}</div></div>
           <div class="kpi"><div class="k">На сумму</div><div class="v">${money(c.total)}</div>${c.rest > 0 ? `<div class="hint red">долг ${money(c.rest)}</div>` : ''}</div>
         </div>
+        <button class="btn" data-act="repeat" data-id="${c.orders[0].id}">🔁 Повторить последний заказ (№${c.orders[0].id})</button>
         <h2>Заказы клиента</h2>
         <div class="list">${c.orders.map(orderRow).join('')}</div>`;
     },
@@ -689,6 +708,7 @@
             <button data-act="designdel" data-id="${d.id}" aria-label="Удалить">✕</button></div>`).join('')}</div>` : '<div class="hint">Дизайн ещё не прикреплён</div>'}
           ${designPicker(o.id)}</div>
         <button class="btn ghost" data-act="edit">Редактировать заказ</button>
+        <button class="btn ghost" data-act="repeat">🔁 Повторить заказ</button>
         <button class="btn ghost" data-act="merge">Объединить с другим заказом</button>
         ${isOwner() ? '<button class="btn danger" data-act="delete">Удалить заказ</button>' : ''}`;
     },
@@ -697,8 +717,9 @@
       const o = v.data;
       const names = (k, f = 'name') => S.dicts[k].filter((x) => x.active !== false).map((x) => x[f]);
       const staff = S.dicts.staff.filter((s) => s.active).map((s) => s.code);
-      v.after = () => { recalcForm(); };
-      return `<h1>${o.id ? 'Заказ №' + o.id : 'Новый заказ'}</h1>
+      v.after = () => { recalcForm(); if (o.design_urls?.length) copyDesigns(o.design_urls); };
+      return `<h1>${o.id ? 'Заказ №' + o.id : o.repeat_of ? 'Повтор заказа №' + o.repeat_of : 'Новый заказ'}</h1>
+        ${o.repeat_of ? '<p class="hint" style="margin:0 6px 10px">Проверьте суммы и дизайн — всё взято из старого заказа. Лишний дизайн уберите ✕.</p>' : ''}
         <div class="card">
           <div class="grid2"><div><label>Дата</label><input type="date" name="order_date" value="${o.order_date || today()}"></div>
           <div><label>Менеджер</label>${isOwner() ? `<select name="manager_code">${opts(staff, o.manager_code || S.user.code)}</select>` : `<input value="${esc(S.user.code)}" disabled>`}</div></div>
@@ -833,6 +854,20 @@
     open: (el) => push({ type: 'order', id: Number(el.dataset.id) }),
     new: () => push({ type: 'form', data: { items: [] } }),
     edit: () => { const o = S.stack[S.stack.length - 1].data; push({ type: 'form', data: JSON.parse(JSON.stringify(o)) }); },
+    // Повторный заказ: новая форма с клиентом, продуктами (с цветами и суммами), доставкой и дизайнами старого.
+    // Дата, этап, оплаты, комментарий и сделка amoCRM — новые. Из карточки клиента — по data-id.
+    async repeat(el) {
+      const cur = S.stack[S.stack.length - 1];
+      let o = cur && cur.type === 'order' && !el.dataset.id ? cur.data : null;
+      if (!o) { try { o = await call('order', { id: Number(el.dataset.id) }); } catch { return; } }
+      push({ type: 'form', data: {
+        repeat_of: o.id, manager_code: o.manager_code, designer_code: o.designer_code, source: o.source,
+        client: o.client, company: o.company, phone: o.phone, instagram: o.instagram,
+        delivery_type: o.delivery_type, delivery_region: o.delivery_region, delivery_service: o.delivery_service, delivery: o.delivery,
+        items: (o.items || []).map(({ product, qty, amount, ink, body }) => ({ product, qty, amount, ink, body })),
+        design_urls: (o.designs || []).map((d) => d.url).filter(Boolean),
+      } });
+    },
     pick: (el) => {
       const row = itemRows().find((r) => r.dataset.product === el.dataset.v);
       if (row) row.remove();
@@ -919,9 +954,16 @@
         twin = (await cached('orders', { from: iso(new Date(Date.now() - 60 * 864e5)) }))
           .filter((o) => phone9(o) === phone9(order) && o.stage !== CLOSED && o.stage !== CANCEL)
           .sort((a, b) => b.id - a.id)[0] || null;
-        // окно подтверждения в Telegram — не длиннее 256 символов
-        if (twin && !(await ask(`Этот телефон уже есть в заказе №${twin.id} (${orderName(twin).slice(0, 40)}${twin.designer_code ? ', дизайнер ' + twin.designer_code : ''}). `
-          + `Добавить новый заказ туда? Оба дизайнера останутся.`))) twin = null;
+        if (twin) {
+          // повтор старого заказа — скорее новый заказ, иначе — скорее вторая часть того же (другой дизайнер)
+          const ch = await choose(`У этого телефона уже есть заказ в работе: №${twin.id} — ${orderName(twin)}`
+            + `${twin.designer_code ? ', дизайнер ' + twin.designer_code : ''}. Это часть того же заказа или новый заказ?`, [
+            { id: 'merge', text: `➕ Добавить в №${twin.id} (оба дизайнера останутся)`, primary: !v.data.repeat_of },
+            { id: 'new', text: '🆕 Сохранить как новый заказ', primary: !!v.data.repeat_of },
+            { id: null, text: 'Отмена — вернуться к заказу' }]);
+          if (!ch) return;
+          if (ch === 'new') twin = null;
+        }
       }
       const designs = S.designs.slice();
       try {
@@ -1268,6 +1310,21 @@
     if (!list) return;
     list.innerHTML = designThumbs(S.designs, 'designrm');
     document.getElementById('designEmpty').hidden = S.designs.length > 0;
+  }
+  // повтор заказа: дизайны старого заказа скачиваем по временным ссылкам и кладём в форму как новые
+  async function copyDesigns(urls) {
+    const list = document.getElementById('designList');
+    let failed = 0;
+    for (const url of urls) {
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(res.status);
+        const image = await readReceipt(await res.blob(), 2400, 0.9);
+        if (!list.isConnected) return; // форму уже закрыли
+        S.designs.push(image); paintDesigns();
+      } catch { failed++; }
+    }
+    if (failed) toast(`Не удалось скопировать дизайнов: ${failed} — добавьте их вручную`);
   }
   // дизайны: в карточке заказа сохраняются сразу, в форме — вместе с заказом; можно несколько за раз
   async function putDesigns(files) {
