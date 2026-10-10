@@ -30,9 +30,12 @@
     designers: ['1A', 'IK', 'F', 'N', 'Zu', 'Lu', 'AS', 'AD', 'AO', 'AB', 'R'].map((code) => ({ code, active: true })),
     sources: ['Instagram', '1 Pechat', '2 Botir', 'Повторный клиент', 'Рекомендация', 'Сайт', 'Звонок', 'Другое'].map((name) => ({ name, active: true })),
     products: ['Печать автомат', 'Печать пластик', 'Печать металл', 'Штамп', 'Датер / нумератор', 'Табличка', 'Бейдж', 'Наклейка',
-      'Сертификат', 'Визитка', 'Баннер', 'Логотип / дизайн', 'Подушка / краска', 'Пакеты', 'Другое'].map((name) => ({ name, active: true, ink: /^(Печать|Штамп|Датер)/.test(name) })),
+      'Сертификат', 'Визитка', 'Баннер', 'Логотип / дизайн', 'Подушка / краска', 'Пакеты', 'Другое'].map((name) => ({ name, active: true, ink: /^(Печать|Штамп|Датер)/.test(name), body: name === 'Печать автомат' })),
     stages: STAGES,
-    expense_categories: ['Материалы', 'Реклама', 'Зарплата', 'Аренда', 'Доставка', 'Коммунальные', 'Налоги', 'Прочее'].map((name) => ({ name, active: true })),
+    body_colors: ['Qora', 'Pushti', 'Qizil', "Ko'k", 'Sariq', 'Jigarrang', 'Yashil'],
+    expense_categories: ['Материалы', 'Реклама', 'Зарплата', 'Аренда', 'Доставка', 'Коммунальные', 'Налоги',
+      'Фото бумага', 'Расходы по баннеру', 'Изготовление таблички', 'Расходы по штампам', 'Интернет', 'Обед для работы',
+      'Бензин для бизнеса', 'АБС', 'Инвестиция', 'Прочее'].map((name) => ({ name, active: true })),
   };
 
   function demoApi() {
@@ -66,7 +69,7 @@
       const sum = (arr, m) => arr.filter((p) => !m || p.method === m).reduce((s, p) => s + p.amount, 0);
       const total = sum(items), paid = sum(pays), rest = total - paid;
       const pay_status = o.stage === 'Отменён' ? 'Отменён' : paid === 0 && total > 0 ? 'Не оплачено' : rest > 0 ? 'Частично' : 'Оплачено';
-      return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount, ink }) => ({ product, qty, amount, ink })),
+      return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount, ink, body }) => ({ product, qty, amount, ink, body })),
         paid_click: sum(pays, 'click'), paid_card: sum(pays, 'card'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
     };
     const find = (id) => {
@@ -107,7 +110,11 @@
         let id = Number(p.order.id);
         if (id) { Object.assign(find(id), row); db.items = db.items.filter((i) => i.order_id !== id); }
         else { id = ++seq.o; db.orders.push({ ...row, id, stage: row.stage || STAGES[0] }); }
-        items.forEach((i) => db.items.push({ order_id: id, product: i.product, qty: Number(i.qty) || 1, amount: Number(i.amount) || 0, ink: i.ink || null }));
+        items.forEach((i) => {
+          const body = demoDicts.products.some((p) => p.name === i.product && p.body) ? i.body || 'Qora' : null;
+          if (body && !demoDicts.body_colors.includes(body)) demoDicts.body_colors.push(body); // как сервер: новый цвет запоминаем
+          db.items.push({ order_id: id, product: i.product, qty: Number(i.qty) || 1, amount: Number(i.amount) || 0, ink: i.ink || null, body });
+        });
         if (p.payment && Number(p.payment.amount) > 0) A.payment_add({ order_id: id, ...p.payment });
         return A.order({ id });
       },
@@ -116,7 +123,8 @@
         db.items.forEach((i) => { if (i.order_id === from.id) i.order_id = into.id; });
         db.payments.forEach((x) => { if (x.order_id === from.id) x.order_id = into.id; });
         db.designs.forEach((x) => { if (x.order_id === from.id) x.order_id = into.id; });
-        ['client', 'company', 'phone', 'instagram', 'source', 'delivery_type', 'delivery_region', 'delivery'].forEach((f) => { into[f] = into[f] || from[f]; });
+        into.designer2_code = into.designer2_code || [from.designer_code, from.designer2_code].find((d) => d && d !== (into.designer_code || from.designer_code)) || null;
+        ['client', 'company', 'phone', 'instagram', 'source', 'designer_code', 'delivery_type', 'delivery_region', 'delivery'].forEach((f) => { into[f] = into[f] || from[f]; });
         db.orders = db.orders.filter((o) => o !== from);
         return A.order({ id: into.id });
       },

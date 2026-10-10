@@ -11,7 +11,7 @@
     'Ташкент': ['Наш курьер', 'Яндекс Доставка', 'Такси', 'Другое'],
     'Область': ['BTS', 'EMU', 'Узпочта', 'Такси / попутка', 'Другое'],
   };
-  const S = { user: null, dicts: null, requests: [], tab: 'orders', stack: [], paste: { target: 'receipt' }, filters: { period: 'month', status: 'all', stage: 'all', q: '' }, dash: { period: 'month', from: '', to: '' } };
+  const S = { user: null, dicts: null, requests: [], tab: 'orders', stack: [], paste: { target: 'receipt', designs: [] }, filters: { period: 'month', status: 'all', stage: 'all', q: '' }, dash: { period: 'month', from: '', to: '' } };
 
   // ---------- утилиты ----------
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -81,6 +81,7 @@
   const AMO = 'https://gano2010.amocrm.ru/leads/detail/';
   // название заказа — имя клиента, как в amoCRM; компания (текст печати) — только если клиента нет
   const orderName = (o) => o.client || o.company || o.phone || 'Без имени';
+  const phone9 = (o) => String(o.phone || '').replace(/\D/g, '').slice(-9); // последние 9 цифр: +998 и пробелы не мешают
   const isInstagram = (source) => /^instagram/i.test(source || '');
   // «@nik» или «nik» → ссылка на профиль; готовую ссылку оставляем как есть
   const igUrl = (s) => (/^https?:\/\//i.test(s) ? s : 'https://instagram.com/' + String(s).replace(/^@/, '').trim());
@@ -93,11 +94,15 @@
       <img id="receiptPreview" alt="Чек" hidden>
       <div class="drop-empty hint" id="receiptEmpty">Скопируйте скриншот и нажмите Ctrl+V</div></div>`;
   // orderId — карточка заказа: дизайн сохраняется сразу; без него (форма) — после сохранения заказа
+  // дизайнов может быть сколько угодно: каждый Ctrl+V / файл добавляет ещё один
   const designPicker = (orderId) => `<div class="drop" data-pz="design" style="margin:10px 0 0">
-      <div class="drop-head"><b>🎨 Дизайн</b><label class="btn sm ghost">📎 Файл<input type="file" accept="image/*" hidden
+      <div class="drop-head"><b>🎨 Дизайн</b><label class="btn sm ghost">📎 Файлы<input type="file" accept="image/*" multiple hidden
         ${orderId ? `data-design-for="${orderId}"` : 'data-design-new'}></label></div>
-      <img id="designPreview" alt="Дизайн" hidden>
-      <div class="drop-empty hint" id="designEmpty">Нажмите сюда, затем Ctrl+V — дизайн, который утвердил клиент</div></div>`;
+      <div class="designs" id="designList"></div>
+      <div class="drop-empty hint" id="designEmpty">Нажмите сюда, затем Ctrl+V — дизайн, который утвердил клиент. Можно несколько</div></div>`;
+  // миниатюры ещё не сохранённых дизайнов; act — действие кнопки «✕» (data-i — номер в списке)
+  const designThumbs = (list, act) => list.map((src, i) => `<div class="design"><img src="${src}" alt="Дизайн ${i + 1}">
+      <button data-act="${act}" data-i="${i}" aria-label="Убрать">✕</button></div>`).join('');
   // дизайн сохраняем крупнее и чётче (max = 2400, quality = 0.9)
   function readReceipt(file, max = 1600, quality = 0.8) {
     return new Promise((resolve, reject) => {
@@ -124,6 +129,13 @@
   const INK_DEFAULT = "Ko'k"; // обычный цвет — выбран сразу, в Google-таблицу не пишется
   const hasInk = (name) => S.dicts.products.some((p) => p.name === name && p.ink);
   const inkDot = (ink) => (ink ? ` <span class="hint"><i class="dot" style="background:${INKS[ink] || '#999'}"></i>${esc(ink)}</span>` : '');
+  // цвет корпуса автомата R40 (у продукта body = true): обычный Qora; свой цвет вписывают — сервер его запоминает
+  const BODY_DEFAULT = 'Qora';
+  const BODY_SWATCH = { 'Qora': '#111', 'Pushti': '#e85aa8', 'Qizil': '#d62828', "Ko'k": '#1e5bd8', 'Sariq': '#f2c200', 'Jigarrang': '#8b5a2b', 'Yashil': '#1f9d48' };
+  const hasBody = (name) => S.dicts.products.some((p) => p.name === name && p.body);
+  const bodyColors = () => S.dicts.body_colors || Object.keys(BODY_SWATCH);
+  const bodyBtn = (k, on) => `<button class="ink ${on ? 'on' : ''}" data-act="body" data-v="${esc(k)}"><i style="background:${BODY_SWATCH[k] || 'conic-gradient(#d62828,#f2c200,#1f9d48,#1e5bd8,#e85aa8,#d62828)'}"></i>${esc(k)}</button>`;
+  const bodyDot = (body) => (body ? ` <span class="hint">· korpus ${esc(body)}</span>` : '');
   const closeDebtMsg = (rest) => `Нельзя закрыть сделку: остаток долга ${money(rest)} сум. Сначала внесите оплату.`;
   const flow = () => S.dicts.stages.filter((s) => s !== CANCEL);
   const stageNo = (o) => flow().indexOf(o.stage) + 1;
@@ -168,7 +180,7 @@
   if (tg) tg.BackButton.onClick(pop);
 
   async function render() {
-    S.receipt = null; S.design = null; // выбранные картинки живут только на текущем экране
+    S.receipt = null; S.designs = []; // выбранные картинки живут только на текущем экране
     const view = S.stack[S.stack.length - 1];
     S.pz = 'receipt'; // Ctrl+V идёт в чек; если поля чека нет (заказ оплачен) — paintPz переключит на дизайн
     $tabs.hidden = !!view && view.type === 'form';
@@ -184,6 +196,7 @@
     if (token !== render.token) return;
     $app.innerHTML = demoBar() + html;
     paintPz();
+    if ($app.querySelector('[data-zone]')) paintPaste(); // картинки раздела «Чек и дизайн» — из S.paste
     if (view && view.after) view.after();
   }
 
@@ -216,12 +229,13 @@
     // Чек и утверждённый дизайн: Ctrl+V (или файл) → выбрать заказ → сохранить
     async paste() {
       const P = S.paste;
+      // чек — одна картинка, дизайнов — сколько угодно (P.designs)
       const zone = (k, title, hint) => `<div class="drop ${P.target === k ? 'on' : ''}" data-act="ptarget" data-v="${k}" data-zone="${k}">
         <div class="drop-head"><b>${title}</b><span class="drop-btns">
-          <button class="btn sm ghost" data-act="pfile" data-v="${k}">📎 Файл</button>
-          <button class="btn sm danger" data-act="pclear" data-v="${k}" ${P[k] ? '' : 'hidden'}>✕</button></span></div>
-        <img alt="" ${P[k] ? `src="${P[k]}"` : 'hidden'}>
-        <div class="drop-empty hint" ${P[k] ? 'hidden' : ''}>${hint}</div></div>`;
+          <button class="btn sm ghost" data-act="pfile" data-v="${k}">📎 ${k === 'design' ? 'Файлы' : 'Файл'}</button>
+          <button class="btn sm danger" data-act="pclear" data-v="${k}" hidden>✕</button></span></div>
+        ${k === 'design' ? '<div class="designs"></div>' : '<img alt="" hidden>'}
+        <div class="drop-empty hint">${hint}</div></div>`;
       let order;
       if (P.orderId) {
         const o = await cached('order', { id: P.orderId });
@@ -253,10 +267,10 @@
         <p class="hint" style="margin:0 6px 10px">Скопируйте скриншот (Win+Shift+S или «Копировать» в Telegram) и нажмите <b>Ctrl+V</b> —
           картинка встанет в выделенное поле. Нажмите на другое поле, чтобы вставлять туда. На телефоне — кнопка «📎 Файл».</p>
         ${zone('receipt', '🧾 Чек оплаты', 'Ctrl+V — вставить скриншот чека')}
-        ${zone('design', '🎨 Дизайн, который утвердил клиент', 'Необязательно. Нажмите сюда, затем Ctrl+V')}
+        ${zone('design', '🎨 Дизайн, который утвердил клиент', 'Необязательно. Нажмите сюда, затем Ctrl+V — можно несколько дизайнов подряд')}
         <h2>Заказ</h2>${order}
         <button class="btn" data-act="psave">Сохранить в заказ</button>
-        <input type="file" accept="image/*" hidden data-paste="receipt"><input type="file" accept="image/*" hidden data-paste="design">`;
+        <input type="file" accept="image/*" hidden data-paste="receipt"><input type="file" accept="image/*" multiple hidden data-paste="design">`;
     },
 
     // клиентская база: клиенты, у которых есть закрытая сделка (только руководитель)
@@ -467,7 +481,9 @@
         <div class="kpi"><div class="k">Заказов с 2+ продуктами</div><div class="v">${list.filter((o) => o.items.length > 1).length}</div></div>
       </div>${bars([...prod.values()].sort((a, b) => b.sum - a.sum), (g) => `${money(g.sum)} · ${g.orders.size} зак. · ${g.qty} шт.`)}
       <h2>Источники клиентов</h2>${bars(group(list, 'source'), (g) => `${money(g.sum)} · ${g.n} зак.`)}
-      <h2>Дизайнеры</h2>${bars(group(list, 'designer_code'), (g) => `${money(g.sum)} · ${g.n} зак.`)}
+      <h2>Дизайнеры</h2>${bars(group(list.flatMap((o) => (o.designer2_code ? [o, { ...o, designer_code: o.designer2_code }] : [o])), 'designer_code'),
+        (g) => `${money(g.sum)} · ${g.n} зак.`)}
+      ${list.some((o) => o.designer2_code) ? '<div class="hint" style="margin:4px 6px 0">Заказ с двумя дизайнерами засчитан обоим</div>' : ''}
       <h2>Доставка</h2>${bars(group(list, (o) => DELIVERY[o.delivery_type] || 'Не указано'), (g) => `${g.n} зак. · ${money(g.sum)}`)}
       ${(() => { const reg = list.filter((o) => o.delivery_type === 'Область');
         return reg.length ? `<h2>Отправки по областям</h2>${bars(group(reg, 'delivery_region'), (g) => `${g.n} зак. · ${money(g.sum)}`)}
@@ -483,8 +499,7 @@
       const list = await cached('orders', {});
       const me = list.find((o) => o.id === v.id);
       if (!me) return '<div class="center hint">Заказ не найден</div>';
-      const phone9 = (o) => String(o.phone || '').replace(/\D/g, '').slice(-9);
-      const nm = (s) => String(s || '').trim().toLowerCase();
+      const nm =(s) => String(s || '').trim().toLowerCase();
       const same = (o) => (phone9(me).length === 9 && phone9(o) === phone9(me)) || (me.instagram && nm(o.instagram) === nm(me.instagram))
         || [me.client, me.company].some((x) => nm(x) && !/^\(.*\)$/.test(x.trim()) && [o.client, o.company].some((y) => nm(y) === nm(x)));
       const others = list.filter((o) => o.id !== me.id);
@@ -641,7 +656,7 @@
 
     async order(v) {
       const o = (v.data = await call('order', { id: v.id }, { quiet: true }));
-      const info = [['Дата', fmtDate(o.order_date)], ['Менеджер', o.manager_code], ['Дизайнер', o.designer_code], ['Источник', o.source],
+      const info = [['Дата', fmtDate(o.order_date)], ['Менеджер', o.manager_code], ['Дизайнер', [o.designer_code, o.designer2_code].filter(Boolean).join(', ')], ['Источник', o.source],
         ['Клиент', o.client], ['Компания', o.client ? o.company : ''], ['Телефон', o.phone ? `<a href="tel:${esc(o.phone.replace(/\s/g, ''))}">${esc(o.phone)}</a>` : ''],
         ['Доставка', [DELIVERY[o.delivery_type], o.delivery_region, o.delivery_service].filter(Boolean).join(' · ')],
         ['Адрес', o.delivery], ['Трек-номер', o.tracking], ['Комментарий', o.comment],
@@ -652,7 +667,7 @@
         ${stepper(o)}
         <div class="list">${info}</div>
         <h2>Продукты</h2>
-        <div class="card">${o.items.map((i) => `<div class="total-line"><span>${esc(i.product)} ×${i.qty}${inkDot(i.ink)}</span><span>${money(i.amount)}</span></div>`).join('')}
+        <div class="card">${o.items.map((i) => `<div class="total-line"><span>${esc(i.product)} ×${i.qty}${inkDot(i.ink)}${bodyDot(i.body)}</span><span>${money(i.amount)}</span></div>`).join('')}
           <div class="total-line big"><span>Итого</span><span>${money(o.total)} сум</span></div>
           <div class="total-line"><span class="green">Оплачено</span><span class="green">${money(o.paid)}</span></div>
           <div class="total-line"><span class="${o.rest > 0 ? 'red' : 'green'}"><b>Остаток</b></span><span class="${o.rest > 0 ? 'red' : 'green'}"><b>${money(o.rest)}</b></span></div></div>
@@ -689,6 +704,8 @@
           <div><label>Менеджер</label>${isOwner() ? `<select name="manager_code">${opts(staff, o.manager_code || S.user.code)}</select>` : `<input value="${esc(S.user.code)}" disabled>`}</div></div>
           <div class="grid2"><div><label>Дизайнер</label><select name="designer_code">${opts(names('designers', 'code'), o.designer_code)}</select></div>
           <div><label>Источник</label><select name="source" data-input="source">${opts(names('sources'), o.source)}</select></div></div>
+          ${o.designer2_code ? `<label>2-й дизайнер (из объединённого заказа)</label>
+            <select name="designer2_code">${opts(names('designers', 'code'), o.designer2_code, 'нет')}</select>` : ''}
           <div id="igField" ${isInstagram(o.source) ? '' : 'hidden'}><label>Ссылка на Instagram</label>
             <input name="instagram" value="${esc(o.instagram)}" placeholder="https://instagram.com/… или @ник" autocomplete="off"></div>
           <label>Клиент (имя / ник)</label><input name="client" value="${esc(o.client)}" autocomplete="off">
@@ -742,7 +759,10 @@
     <input type="number" inputmode="decimal" data-f="qty" value="${i.qty ?? 1}" min="0" placeholder="шт."><input type="number" inputmode="decimal" data-f="amount" value="${kIn(i.amount)}" placeholder="тыс. сум">
     <button data-act="delitem" aria-label="Убрать">×</button>
     ${hasInk(i.product) ? `<div class="inks"><span class="hint">Siyoh rangi:</span>${Object.entries(INKS).map(([k, c]) =>
-      `<button class="ink ${k === (i.ink || INK_DEFAULT) ? 'on' : ''}" data-act="ink" data-v="${k}"><i style="background:${c}"></i>${k}</button>`).join('')}</div>` : ''}</div>`;
+      `<button class="ink ${k === (i.ink || INK_DEFAULT) ? 'on' : ''}" data-act="ink" data-v="${k}"><i style="background:${c}"></i>${k}</button>`).join('')}</div>` : ''}
+    ${hasBody(i.product) ? (() => { const cur = i.body || BODY_DEFAULT, list = bodyColors().includes(cur) ? bodyColors() : [...bodyColors(), cur];
+      return `<div class="inks" data-body><span class="hint">Korpus rangi:</span>${list.map((k) => bodyBtn(k, k === cur)).join('')}
+        <span class="body-add"><input data-body-new placeholder="Ro'yxatda yo'q rang…" maxlength="30"><button class="ink" data-act="bodyok">+ Qo'shish</button></span></div>`; })() : ''}</div>`;
   function deliveryFields(type, o) {
     if (type === 'Самовывоз') return '<p class="hint" style="margin:10px 2px 0">Клиент заберёт заказ сам.</p>';
     return `${type === 'Область' ? `<label>Область</label><select name="delivery_region">${opts(REGIONS, o.delivery_region, 'Выберите область')}</select>` : ''}
@@ -829,6 +849,23 @@
       box.querySelectorAll('.ink').forEach((b) => b.classList.toggle('on', b === el));
       box.classList.remove('open');
     },
+    body: (el) => ACTS.ink(el),
+    // свой цвет корпуса: есть в списке (без учёта регистра) — выбираем его, нет — добавляем кнопку
+    bodyok: (el) => {
+      const box = el.closest('[data-body]'), input = box.querySelector('[data-body-new]');
+      const raw = input.value.trim().replace(/\s+/g, ' ');
+      if (!raw) return toast('Yangi rangni yozing');
+      const name = raw[0].toUpperCase() + raw.slice(1);
+      let btn = [...box.querySelectorAll('[data-act=body]')].find((b) => b.dataset.v.toLowerCase() === name.toLowerCase());
+      if (!btn) {
+        box.querySelector('.body-add').insertAdjacentHTML('beforebegin', bodyBtn(name, false));
+        btn = box.querySelector('.body-add').previousElementSibling;
+        if (S.dicts.body_colors && !S.dicts.body_colors.includes(name)) S.dicts.body_colors.push(name); // сервер запомнит при сохранении
+      }
+      input.value = '';
+      box.querySelectorAll('[data-act=body]').forEach((b) => b.classList.toggle('on', b === btn));
+      box.classList.remove('open');
+    },
     seg: (el) => {
       el.parentNode.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el));
       if (el.parentNode.dataset.seg === 'dtype') {
@@ -841,7 +878,7 @@
       const v = S.stack[S.stack.length - 1];
       const val = (n) => { const x = $app.querySelector(`[name=${n}]`); return x ? x.value : undefined; };
       const order = { id: v.data.id, order_date: val('order_date'), manager_code: val('manager_code'), designer_code: val('designer_code'),
-        source: val('source'), client: val('client'), company: val('company'), phone: val('phone'), stage: val('stage'),
+        designer2_code: val('designer2_code'), source: val('source'), client: val('client'), company: val('company'), phone: val('phone'), stage: val('stage'),
         delivery: val('delivery'), comment: val('comment'), delivery_type: segVal('dtype'),
         delivery_region: val('delivery_region'), delivery_service: val('delivery_service'), tracking: val('tracking'),
         amo_lead: val('amo_lead'), instagram: isInstagram(val('source')) ? val('instagram') : '' };
@@ -849,7 +886,8 @@
       if (order.delivery_type === 'Область' && !order.delivery_service) return toast('Выберите, чем отправляем (BTS, EMU…)');
       const items = itemRows().map((r) => ({
         product: r.dataset.product, qty: r.querySelector('[data-f=qty]').value, amount: kOut(r.querySelector('[data-f=amount]').value),
-        ink: r.querySelector('.ink.on')?.dataset.v || null }));
+        ink: r.querySelector('.inks:not([data-body]) .ink.on')?.dataset.v || null,
+        body: r.querySelector('[data-body] .ink.on')?.dataset.v || null }));
       if (!items.length) return toast('Отметьте хотя бы один продукт');
       const noInk = items.find((i) => hasInk(i.product) && !i.ink);
       if (noInk) return toast(`${noInk.product}: siyoh rangini tanlang`);
@@ -866,15 +904,33 @@
         const rest = items.reduce((s, i) => s + (Number(i.amount) || 0), 0) - (Number(v.data.paid) || 0) - (payment ? payment.amount : 0);
         if (rest > 0) return toast(closeDebtMsg(rest));
       }
+      // Новый заказ, а у этого телефона уже есть заказ в работе (например, визитку делает другой дизайнер) —
+      // вливаем новый в тот: клиент и сделка одна, оба дизайнера остаются в заказе.
+      let twin = null;
+      if (!v.data.id && phone9(order).length === 9) {
+        twin = (await cached('orders', {})).filter((o) => phone9(o) === phone9(order) && o.stage !== CLOSED && o.stage !== CANCEL)
+          .sort((a, b) => b.id - a.id)[0] || null;
+        // окно подтверждения в Telegram — не длиннее 256 символов
+        if (twin && !(await ask(`Этот телефон уже есть в заказе №${twin.id} (${orderName(twin).slice(0, 40)}${twin.designer_code ? ', дизайнер ' + twin.designer_code : ''}). `
+          + `Добавить новый заказ туда? Оба дизайнера останутся.`))) twin = null;
+      }
       el.disabled = true;
-      const design = S.design;
+      const designs = S.designs.slice();
       try {
         const saved = await call('order_save', { order, items, payment });
-        // заказ уже сохранён: если дизайн не загрузится, его можно добавить в карточке
-        const ok = !design || await call('design_add', { order_id: saved.id, image: design }, { quiet: true }).then(() => true, () => false);
-        haptic('success'); toast(ok ? 'Заказ сохранён' : 'Заказ сохранён, но дизайн не загрузился — добавьте его в карточке');
-        S.stack = S.stack.filter((x) => x.type !== 'form' && !(x.type === 'order' && x.id === saved.id));
-        push({ type: 'order', id: saved.id });
+        // заказ уже сохранён: если какой-то дизайн не загрузится, его можно добавить в карточке
+        let failed = 0;
+        for (const image of designs) {
+          if (!(await call('design_add', { order_id: saved.id, image }, { quiet: true }).then(() => true, () => false))) failed++;
+        }
+        // заказ уже сохранён: если объединить не вышло, он останется отдельным — можно объединить из карточки
+        const into = twin && await call('order_merge', { id: twin.id, from: saved.id }, { quiet: true }).then(() => twin.id, () => null);
+        const id = into || saved.id;
+        haptic('success');
+        toast(failed ? `Заказ сохранён, но ${failed} из ${designs.length} дизайнов не загрузились — добавьте их в карточке`
+          : into ? `Добавлено в заказ №${into}` : twin ? `Заказ сохранён отдельно (№${saved.id}) — объединить не удалось` : 'Заказ сохранён');
+        S.stack = S.stack.filter((x) => x.type !== 'form' && !(x.type === 'order' && x.id === id));
+        push({ type: 'order', id });
       } catch { el.disabled = false; }
     },
     async payadd(el) {
@@ -1011,7 +1067,9 @@
     // раздел «Чек и дизайн»
     ptarget: (el) => { S.paste.target = el.dataset.v; paintPaste(); },
     pfile: (el) => { S.paste.target = el.dataset.v; paintPaste(); $app.querySelector(`[data-paste=${el.dataset.v}]`).click(); },
-    pclear: (el) => { S.paste[el.dataset.v] = null; paintPaste(); },
+    pclear: (el) => { if (el.dataset.v === 'design') S.paste.designs = []; else S.paste[el.dataset.v] = null; paintPaste(); },
+    pdesignrm: (el) => { S.paste.designs.splice(Number(el.dataset.i), 1); paintPaste(); },
+    designrm: (el) => { S.designs.splice(Number(el.dataset.i), 1); paintDesigns(); },
     ppick: (el) => { Object.assign(S.paste, { orderId: Number(el.dataset.id), payTo: null }); render(); },
     punpick: () => { S.paste.orderId = null; render(); },
     payto: (el) => {
@@ -1021,7 +1079,7 @@
     },
     async psave(el) {
       const P = S.paste;
-      if (!P.receipt && !P.design) return toast('Вставьте чек или дизайн (Ctrl+V)');
+      if (!P.receipt && !P.designs.length) return toast('Вставьте чек или дизайн (Ctrl+V)');
       if (!P.orderId) return toast('Выберите заказ');
       let pay = null;
       if (P.receipt && (!P.payTo || P.payTo === 'new')) {
@@ -1040,9 +1098,13 @@
           await call(pay ? 'payment_add' : 'payment_receipt', pay || { id: Number(P.payTo), receipt: P.receipt });
           P.receipt = null; paintPaste(); // чек уже сохранён — при повторе не создадим вторую оплату
         }
-        if (P.design) await call('design_add', { order_id: P.orderId, image: P.design });
+        // сохранённые дизайны убираем из списка сразу — при повторе после ошибки не задвоятся
+        while (P.designs.length) {
+          await call('design_add', { order_id: P.orderId, image: P.designs[0] });
+          P.designs.shift(); paintPaste();
+        }
         haptic('success'); toast(`Сохранено в заказ №${P.orderId}`);
-        S.paste = { target: 'receipt' }; render();
+        S.paste = { target: 'receipt', designs: [] }; render();
       } catch { el.disabled = false; }
     },
     async designdel(el) {
@@ -1064,6 +1126,7 @@
     const t = e.target;
     if (e.key !== 'Enter' || e.isComposing || !t.matches('input, select') || t.type === 'search') return;
     e.preventDefault();
+    if (t.matches('[data-body-new]')) return ACTS.bodyok(t); // свой цвет корпуса — Enter = OK
     const list = fields(), next = list[list.indexOf(t) + 1];
     if (next) { next.focus(); if (next.select && next.tagName === 'INPUT' && next.type !== 'date' && next.type !== 'time') next.select(); }
     else t.blur(); // последнее поле — просто убираем клавиатуру
@@ -1112,8 +1175,12 @@
         showReceipt(await readReceipt(file));
       } catch (err) { toast(err.message); }
     }
-    if (file && e.target.dataset.paste) { await setPaste(e.target.dataset.paste, file); e.target.value = ''; }
-    if (file && (e.target.dataset.designFor || e.target.dataset.designNew !== undefined)) await putDesign(file);
+    const files = [...((e.target.files) || [])];
+    if (file && e.target.dataset.paste) {
+      for (const f of e.target.dataset.paste === 'design' ? files : [file]) await setPaste(e.target.dataset.paste, f);
+      e.target.value = '';
+    }
+    if (file && (e.target.dataset.designFor || e.target.dataset.designNew !== undefined)) { await putDesigns(files); e.target.value = ''; }
     if (file && e.target.dataset.receiptFor) {
       let receipt;
       try { receipt = await readReceipt(file); } catch (err) { return toast(err.message); }
@@ -1128,11 +1195,12 @@
   function paintPaste() {
     const P = S.paste;
     $app.querySelectorAll('[data-zone]').forEach((z) => {
-      const k = z.dataset.zone, img = z.querySelector('img');
+      const k = z.dataset.zone, has = k === 'design' ? P.designs.length > 0 : !!P[k];
       z.classList.toggle('on', P.target === k);
-      img.hidden = !P[k]; if (P[k]) img.src = P[k]; else img.removeAttribute('src');
-      z.querySelector('.drop-empty').hidden = !!P[k];
-      z.querySelector('[data-act=pclear]').hidden = !P[k];
+      if (k === 'design') z.querySelector('.designs').innerHTML = designThumbs(P.designs, 'pdesignrm');
+      else { const img = z.querySelector('img'); img.hidden = !has; if (has) img.src = P[k]; else img.removeAttribute('src'); }
+      z.querySelector('.drop-empty').hidden = has;
+      z.querySelector('[data-act=pclear]').hidden = !has;
     });
     const box = document.getElementById('payBox');
     if (box) box.hidden = !P.receipt;
@@ -1154,42 +1222,64 @@
     document.getElementById('receiptEmpty').hidden = true;
     haptic('success'); toast('Чек вставлен');
   }
-  // дизайн: в карточке заказа сохраняется сразу, в форме — вместе с заказом
-  async function putDesign(file) {
-    let image;
-    try { image = await readReceipt(file, 2400, 0.9); } catch (err) { return toast(err.message); }
+  // миниатюры дизайнов в форме заказа (ещё не сохранены)
+  function paintDesigns() {
+    const list = document.getElementById('designList');
+    if (!list) return;
+    list.innerHTML = designThumbs(S.designs, 'designrm');
+    document.getElementById('designEmpty').hidden = S.designs.length > 0;
+  }
+  // дизайны: в карточке заказа сохраняются сразу, в форме — вместе с заказом; можно несколько за раз
+  async function putDesigns(files) {
+    const images = [];
+    for (const f of files) {
+      try { images.push(await readReceipt(f, 2400, 0.9)); } catch (err) { toast(err.message); }
+    }
+    if (!images.length) return;
     const input = $app.querySelector('[data-design-for]');
     if (input) {
-      toast('Сохраняю дизайн…');
-      try { await call('design_add', { order_id: Number(input.dataset.designFor), image }); haptic('success'); toast('Дизайн сохранён'); render(); }
-      catch { /* call уже показал ошибку */ }
+      let saved = 0;
+      for (const image of images) {
+        toast(images.length > 1 ? `Сохраняю дизайн ${saved + 1} из ${images.length}…` : 'Сохраняю дизайн…');
+        try { await call('design_add', { order_id: Number(input.dataset.designFor), image }); saved++; }
+        catch { break; /* call уже показал ошибку */ }
+      }
+      if (saved) { haptic('success'); toast(saved > 1 ? `Сохранено дизайнов: ${saved}` : 'Дизайн сохранён'); render(); }
       return;
     }
-    S.design = image;
-    const img = document.getElementById('designPreview'); img.src = image; img.hidden = false;
-    document.getElementById('designEmpty').hidden = true;
-    haptic('success'); toast('Дизайн вставлен — сохранится вместе с заказом');
+    S.designs.push(...images);
+    paintDesigns();
+    haptic('success'); toast(`Дизайнов: ${S.designs.length} — сохранятся вместе с заказом`);
   }
-  const putPz = async (kind, file) => {
-    if (kind === 'design') return putDesign(file);
-    try { showReceipt(await readReceipt(file)); } catch (err) { toast(err.message); }
+  const putPz = async (kind, files) => {
+    if (kind === 'design') return putDesigns(files);
+    try { showReceipt(await readReceipt(files[0])); } catch (err) { toast(err.message); }
   };
   async function setPaste(k, file) {
-    try { S.paste[k] = k === 'design' ? await readReceipt(file, 2400, 0.9) : await readReceipt(file); }
-    catch (err) { return toast(err.message); }
+    try {
+      if (k === 'design') S.paste.designs.push(await readReceipt(file, 2400, 0.9));
+      else S.paste[k] = await readReceipt(file);
+    } catch (err) { return toast(err.message); }
     paintPaste(); haptic('success');
-    toast(k === 'design' ? 'Дизайн вставлен' : S.paste.orderId ? 'Чек вставлен' : 'Чек вставлен — выберите заказ');
+    toast(k === 'design' ? `Дизайнов: ${S.paste.designs.length}` : S.paste.orderId ? 'Чек вставлен' : 'Чек вставлен — выберите заказ');
   }
   const isPasteTab = () => !S.stack.length && S.tab === 'paste';
-  const imageFile = (dt) => [...((dt && dt.files) || [])].find((f) => f.type.startsWith('image/'))
-    || [...((dt && dt.items) || [])].filter((i) => i.kind === 'file' && i.type.startsWith('image/')).map((i) => i.getAsFile())[0];
+  const imageFiles = (dt) => {
+    const files = [...((dt && dt.files) || [])].filter((f) => f.type.startsWith('image/'));
+    return files.length ? files
+      : [...((dt && dt.items) || [])].filter((i) => i.kind === 'file' && i.type.startsWith('image/')).map((i) => i.getAsFile());
+  };
   document.addEventListener('paste', async (e) => {
-    const file = imageFile(e.clipboardData);
-    if (!file) return; // обычный текст вставляется как всегда
-    if (isPasteTab()) { e.preventDefault(); return setPaste(S.paste.target, file); }
+    const files = imageFiles(e.clipboardData);
+    if (!files.length) return; // обычный текст вставляется как всегда
+    if (isPasteTab()) {
+      e.preventDefault();
+      for (const f of S.paste.target === 'design' ? files : files.slice(0, 1)) await setPaste(S.paste.target, f);
+      return;
+    }
     // в карточке заказа и в форме Ctrl+V прикрепляет чек к новой оплате
     paintPz();
-    if ($app.querySelector(`[data-pz=${S.pz}]`)) { e.preventDefault(); putPz(S.pz, file); }
+    if ($app.querySelector(`[data-pz=${S.pz}]`)) { e.preventDefault(); putPz(S.pz, files); }
     else toast('Здесь некуда вставить картинку — откройте раздел «📎 Чеки»');
   });
   $app.addEventListener('dragover', (e) => {
@@ -1201,10 +1291,13 @@
     const z = e.target.closest(isPasteTab() ? '[data-zone]' : '[data-pz]');
     if (!z) return;
     e.preventDefault(); z.classList.remove('over');
-    const file = imageFile(e.dataTransfer);
-    if (!file) return toast('Перетащите картинку');
-    if (z.dataset.zone) { S.paste.target = z.dataset.zone; setPaste(z.dataset.zone, file); }
-    else { S.pz = z.dataset.pz; paintPz(); putPz(z.dataset.pz, file); }
+    const files = imageFiles(e.dataTransfer);
+    if (!files.length) return toast('Перетащите картинку');
+    if (z.dataset.zone) {
+      const k = z.dataset.zone;
+      S.paste.target = k;
+      (async () => { for (const f of k === 'design' ? files : files.slice(0, 1)) await setPaste(k, f); })();
+    } else { S.pz = z.dataset.pz; paintPz(); putPz(z.dataset.pz, files); }
   });
 
   function demoBar() {
