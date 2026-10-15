@@ -70,7 +70,7 @@
       const total = sum(items), paid = sum(pays), rest = total - paid;
       const pay_status = o.stage === 'Отменён' ? 'Отменён' : paid === 0 && total > 0 ? 'Не оплачено' : rest > 0 ? 'Частично' : 'Оплачено';
       return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount, ink, body }) => ({ product, qty, amount, ink, body })),
-        paid_click: sum(pays, 'click'), paid_card: sum(pays, 'card'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
+        paid_click: sum(pays, 'click'), paid_paymi: sum(pays, 'paymi'), paid_card: sum(pays, 'card'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
     };
     const find = (id) => {
       const o = db.orders.find((x) => x.id === Number(id));
@@ -123,7 +123,7 @@
         else { id = ++seq.o; db.orders.push({ ...row, id, stage: row.stage || STAGES[0] }); }
         items.forEach((i) => {
           const body = demoDicts.products.some((p) => p.name === i.product && p.body) ? i.body || 'Qora' : null;
-          if (body && !demoDicts.body_colors.includes(body)) demoDicts.body_colors.push(body); // как сервер: новый цвет запоминаем
+          (body || '').split(',').map((b) => b.trim()).filter((b) => b && !demoDicts.body_colors.includes(b)).forEach((b) => demoDicts.body_colors.push(b)); // как сервер: новый цвет запоминаем
           db.items.push({ order_id: id, product: i.product, qty: Number(i.qty) || 1, amount: Number(i.amount) || 0, ink: i.ink || null, body });
         });
         if (p.payment && Number(p.payment.amount) > 0) A.payment_add({ order_id: id, ...p.payment });

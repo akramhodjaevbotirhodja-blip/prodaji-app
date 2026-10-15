@@ -3,7 +3,8 @@
   const VERSION = (String(document.currentScript && document.currentScript.src).match(/v=(\w+)/) || [])[1] || '—';
   const $app = document.getElementById('app');
   const $tabs = document.getElementById('tabs');
-  const METHODS = { click: 'Click', card: 'Карта', cash: 'Наличные', transfer: 'Перечисление' };
+  // QK — оплата по QR-коду, их две: Click и Paymi
+  const METHODS = { click: 'QK Click', paymi: 'QK Paymi', card: 'Карта', cash: 'Наличные', transfer: 'Перечисление' };
   const DELIVERY = { 'Самовывоз': 'Самовывоз', 'Ташкент': 'По Ташкенту', 'Область': 'По области' };
   const REGIONS = ['Андижанская', 'Бухарская', 'Джизакская', 'Кашкадарьинская', 'Навоийская', 'Наманганская', 'Самаркандская',
     'Сурхандарьинская', 'Сырдарьинская', 'Ташкентская обл.', 'Ферганская', 'Хорезмская', 'Каракалпакстан'];
@@ -146,7 +147,10 @@
   const INKS = { "Ko'k": '#1e5bd8', 'Qora': '#111', 'Qizil': '#d62828', 'Yashil': '#1f9d48', 'Pushti': '#e85aa8' };
   const INK_DEFAULT = "Ko'k"; // обычный цвет — выбран сразу, в Google-таблицу не пишется
   const hasInk = (name) => S.dicts.products.some((p) => p.name === name && p.ink);
-  const inkDot = (ink) => (ink ? ` <span class="hint"><i class="dot" style="background:${INKS[ink] || '#999'}"></i>${esc(ink)}</span>` : '');
+  // у нескольких штук одного продукта цвета могут быть разные: «Qizil, Yashil, Ko'k» — по штуке на цвет
+  const splitColors = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const MAX_UNITS = 20; // больше штук по отдельности не раскладываем
+  const inkDot = (ink) => splitColors(ink).map((k) => ` <span class="hint"><i class="dot" style="background:${INKS[k] || '#999'}"></i>${esc(k)}</span>`).join('');
   // цвет корпуса автомата R40 (у продукта body = true): обычный Qora; свой цвет вписывают — сервер его запоминает
   const BODY_DEFAULT = 'Qora';
   const BODY_SWATCH = { 'Qora': '#111', 'Pushti': '#e85aa8', 'Qizil': '#d62828', "Ko'k": '#1e5bd8', 'Sariq': '#f2c200', 'Jigarrang': '#8b5a2b', 'Yashil': '#1f9d48' };
@@ -780,11 +784,37 @@
   const itemHtml = (i) => `<div class="item" data-product="${esc(i.product)}"><div class="iname">${esc(i.product)}</div>
     <input type="number" inputmode="decimal" data-f="qty" value="${i.qty ?? 1}" min="0" placeholder="шт."><input type="number" inputmode="decimal" data-f="amount" value="${kIn(i.amount)}" placeholder="тыс. сум">
     <button data-act="delitem" aria-label="Убрать">×</button>
-    ${hasInk(i.product) ? `<div class="inks"><span class="hint">Siyoh rangi:</span>${Object.entries(INKS).map(([k, c]) =>
-      `<button class="ink ${k === (i.ink || INK_DEFAULT) ? 'on' : ''}" data-act="ink" data-v="${k}"><i style="background:${c}"></i>${k}</button>`).join('')}</div>` : ''}
-    ${hasBody(i.product) ? (() => { const cur = i.body || BODY_DEFAULT, list = bodyColors().includes(cur) ? bodyColors() : [...bodyColors(), cur];
-      return `<div class="inks" data-body><span class="hint">Korpus rangi:</span>${list.map((k) => bodyBtn(k, k === cur)).join('')}
-        <span class="body-add"><input data-body-new placeholder="Ro'yxatda yo'q rang…" maxlength="30"><button class="ink" data-act="bodyok">+ Qo'shish</button></span></div>`; })() : ''}</div>`;
+    ${hasInk(i.product) ? colorSet('ink', splitColors(i.ink), i.qty ?? 1) : ''}
+    ${hasBody(i.product) ? colorSet('body', splitColors(i.body), i.qty ?? 1) : ''}</div>`;
+  // один выбор цвета на все штуки или («Har xil rang») — свой цвет у каждой штуки
+  const unitCount = (qty) => Math.max(1, Math.min(MAX_UNITS, Math.round(Number(qty) || 1)));
+  function colorSet(kind, list, qty, multi = new Set(list).size > 1) {
+    const n = multi ? unitCount(qty) : 1;
+    const boxes = Array.from({ length: n }, (_, k) => colorBox(kind, list[k] || list[0] || (kind === 'ink' ? INK_DEFAULT : BODY_DEFAULT),
+      multi ? `${k + 1}-dona:` : kind === 'ink' ? 'Siyoh rangi:' : 'Korpus rangi:')).join('');
+    return `<div class="colorset" data-kind="${kind}" data-multi="${multi ? 1 : 0}" data-colors="${esc(list.join(','))}">${boxes}
+      <button class="ink multi" data-act="multi" ${unitCount(qty) < 2 && !multi ? 'hidden' : ''}>${multi ? 'Hammasi bir xil rang' : 'Har xil rang'}</button></div>`;
+  }
+  function colorBox(kind, cur, label) {
+    if (kind === 'ink') return `<div class="inks"><span class="hint">${label}</span>${Object.entries(INKS).map(([k, c]) =>
+      `<button class="ink ${k === cur ? 'on' : ''}" data-act="ink" data-v="${k}"><i style="background:${c}"></i>${k}</button>`).join('')}</div>`;
+    const list = bodyColors().includes(cur) ? bodyColors() : [...bodyColors(), cur];
+    return `<div class="inks" data-body><span class="hint">${label}</span>${list.map((k) => bodyBtn(k, k === cur)).join('')}
+      <span class="body-add"><input data-body-new placeholder="Ro'yxatda yo'q rang…" maxlength="30"><button class="ink" data-act="bodyok">+ Qo'shish</button></span></div>`;
+  }
+  const setColors = (set) => [...set.querySelectorAll('.inks')].map((b) => b.querySelector('.ink.on[data-v]')?.dataset.v).filter(Boolean);
+  // для сохранения: один цвет — как раньше, разные — через запятую по штукам
+  const setValue = (set) => {
+    if (!set) return null;
+    const list = setColors(set);
+    return new Set(list).size > 1 ? list.join(', ') : list[0] || null;
+  };
+  // при правке количества (стёрли «3», ввели «5») цвета штук сверх нового числа не теряем — помним их в data-colors
+  function redrawSet(set, multi) {
+    const cur = setColors(set), kept = splitColors(set.dataset.colors);
+    const list = multi === undefined ? cur.concat(kept.slice(cur.length)) : cur;
+    set.outerHTML = colorSet(set.dataset.kind, list, set.closest('.item').querySelector('[data-f=qty]').value, multi ?? set.dataset.multi === '1');
+  }
   function deliveryFields(type, o) {
     if (type === 'Самовывоз') return '<p class="hint" style="margin:10px 2px 0">Клиент заберёт заказ сам.</p>';
     return `${type === 'Область' ? `<label>Область</label><select name="delivery_region">${opts(REGIONS, o.delivery_region, 'Выберите область')}</select>` : ''}
@@ -886,6 +916,7 @@
       box.classList.remove('open');
     },
     body: (el) => ACTS.ink(el),
+    multi: (el) => { const set = el.closest('.colorset'); redrawSet(set, set.dataset.multi !== '1'); },
     // свой цвет корпуса: есть в списке (без учёта регистра) — выбираем его, нет — добавляем кнопку
     bodyok: (el) => {
       const box = el.closest('[data-body]'), input = box.querySelector('[data-body-new]');
@@ -928,8 +959,8 @@
       if (order.delivery_type === 'Область' && !order.delivery_service) return toast('Выберите, чем отправляем (BTS, EMU…)');
       const items = itemRows().map((r) => ({
         product: r.dataset.product, qty: r.querySelector('[data-f=qty]').value, amount: kOut(r.querySelector('[data-f=amount]').value),
-        ink: r.querySelector('.inks:not([data-body]) .ink.on')?.dataset.v || null,
-        body: r.querySelector('[data-body] .ink.on')?.dataset.v || null }));
+        ink: setValue(r.querySelector('.colorset[data-kind=ink]')),
+        body: setValue(r.querySelector('.colorset[data-kind=body]')) }));
       if (!items.length) return toast('Отметьте хотя бы один продукт');
       const noInk = items.find((i) => hasInk(i.product) && !i.ink);
       if (noInk) return toast(`${noInk.product}: siyoh rangini tanlang`);
@@ -1236,6 +1267,11 @@
   $app.addEventListener('input', (e) => {
     const k = e.target.dataset.input;
     if (e.target.closest('#items')) recalcForm();
+    // поменяли количество — у «Har xil rang» столько же выборов цвета, сколько штук
+    if (e.target.matches('#items [data-f=qty]')) e.target.closest('.item').querySelectorAll('.colorset').forEach((set) => {
+      if (set.dataset.multi === '1') redrawSet(set);
+      else set.querySelector('[data-act=multi]').hidden = unitCount(e.target.value) < 2;
+    });
     if (e.target.name === 'phone' && document.getElementById('clientHint')) {
       clearTimeout(ACTS.ct); ACTS.ct = setTimeout(() => clientLookup(e.target), 400);
     }
