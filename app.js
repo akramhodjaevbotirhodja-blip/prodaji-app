@@ -4,7 +4,7 @@
   const $app = document.getElementById('app');
   const $tabs = document.getElementById('tabs');
   // QK — оплата по QR-коду, их две: Click и Paymi
-  const METHODS = { click: 'QK Click', paymi: 'QK Paymi', card: 'Карта', cash: 'Наличные', transfer: 'Перечисление' };
+  const METHODS = { click: 'QK Click', paymi: 'QK Paymi', card: 'Карта', terminal: 'Терминал', cash: 'Наличные', transfer: 'Перечисление' };
   const DELIVERY = { 'Самовывоз': 'Самовывоз', 'Ташкент': 'По Ташкенту', 'Область': 'По области' };
   const REGIONS = ['Андижанская', 'Бухарская', 'Джизакская', 'Кашкадарьинская', 'Навоийская', 'Наманганская', 'Самаркандская',
     'Сурхандарьинская', 'Сырдарьинская', 'Ташкентская обл.', 'Ферганская', 'Хорезмская', 'Каракалпакстан'];
@@ -776,7 +776,15 @@
     },
   };
 
-  const segHtml = (name, cur) => `<div class="seg" data-seg="${name}">${Object.entries(METHODS).map(([k, t]) => `<button data-act="seg" data-v="${k}" class="${k === cur ? 'on' : ''}">${t}</button>`).join('')}</div>`;
+  // способ оплаты: «QK» — одна кнопка, под ней выбор Click / Paymi
+  const QK = { click: 'Click', paymi: 'Paymi' };
+  const PAY_BUTTONS = { qk: 'QK', card: 'Карта', terminal: 'Терминал', cash: 'Наличные', transfer: 'Перечисление' };
+  const segHtml = (name, cur) => {
+    const qk = cur in QK;
+    const btn = (k, t, on) => `<button data-act="seg" data-v="${k}" class="${on ? 'on' : ''}">${t}</button>`;
+    return `<div class="seg" data-seg="${name}">${Object.entries(PAY_BUTTONS).map(([k, t]) => btn(k, t, k === 'qk' ? qk : k === cur)).join('')}</div>
+      <div class="seg qk" data-seg="${name}-qk" ${qk ? '' : 'hidden'}>${Object.entries(QK).map(([k, t]) => btn(k, t, k === (qk ? cur : 'click'))).join('')}</div>`;
+  };
   const pickHtml = (items) => {
     const chosen = new Set(items.map((i) => i.product));
     return S.dicts.products.filter((p) => p.active !== false).map((p) =>
@@ -838,7 +846,10 @@
     const el = document.getElementById('formTotal'); if (!el) return;
     el.textContent = money([...document.querySelectorAll('#items [data-f=amount]')].reduce((s, x) => s + kOut(x.value), 0)) + ' сум';
   }
-  const segVal = (name) => { const b = document.querySelector(`[data-seg=${name}] .on`); return b && b.dataset.v; };
+  const segVal = (name) => {
+    const b = document.querySelector(`[data-seg=${name}] .on`);
+    return b && (b.dataset.v === 'qk' ? segVal(name + '-qk') : b.dataset.v); // QK → выбранный Click или Paymi
+  };
 
   // ---------- действия ----------
   const ACTS = {
@@ -936,6 +947,8 @@
     },
     seg: (el) => {
       el.parentNode.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el));
+      const qk = $app.querySelector(`[data-seg="${el.parentNode.dataset.seg}-qk"]`); // нажали QK — показать Click / Paymi
+      if (qk) qk.hidden = el.dataset.v !== 'qk';
       if (el.parentNode.dataset.seg === 'dtype') {
         const keep = {};
         ['delivery', 'delivery_region', 'delivery_service', 'tracking'].forEach((n) => { const x = $app.querySelector(`[name=${n}]`); if (x) keep[n] = x.value; });

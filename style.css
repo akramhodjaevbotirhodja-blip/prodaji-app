@@ -101,6 +101,8 @@ label { display: block; font-size: 13px; color: var(--hint); margin: 10px 2px 4p
 .item button { border: 0; background: none; color: var(--red); font-size: 22px; cursor: pointer; }
 .seg { display: flex; flex-wrap: wrap; background: var(--bg2); border-radius: 10px; padding: 3px; gap: 3px; }
 .seg button { flex: 1 0 auto; border: 0; background: none; padding: 8px 4px; border-radius: 8px; font: inherit; font-size: 13px; color: var(--text); cursor: pointer; }
+.seg.qk { margin-top: 6px; }
+.seg[hidden] { display: none; }
 .seg button.on { background: var(--bg); box-shadow: 0 1px 3px rgba(0,0,0,.12); font-weight: 600; }
 .total-line { display: flex; justify-content: space-between; padding: 6px 2px; font-variant-numeric: tabular-nums; }
 .total-line.big { font-size: 18px; font-weight: 700; }

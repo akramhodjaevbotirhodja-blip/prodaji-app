@@ -70,7 +70,7 @@
       const total = sum(items), paid = sum(pays), rest = total - paid;
       const pay_status = o.stage === 'Отменён' ? 'Отменён' : paid === 0 && total > 0 ? 'Не оплачено' : rest > 0 ? 'Частично' : 'Оплачено';
       return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount, ink, body }) => ({ product, qty, amount, ink, body })),
-        paid_click: sum(pays, 'click'), paid_paymi: sum(pays, 'paymi'), paid_card: sum(pays, 'card'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
+        paid_click: sum(pays, 'click'), paid_paymi: sum(pays, 'paymi'), paid_card: sum(pays, 'card'), paid_terminal: sum(pays, 'terminal'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
     };
     const find = (id) => {
       const o = db.orders.find((x) => x.id === Number(id));
