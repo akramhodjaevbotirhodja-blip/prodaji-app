@@ -277,8 +277,9 @@
               <div class="grid2"><div><label>Дата оплаты</label>${payDateField('payDate')}</div>
               <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="payTime"></div></div></div></div>`;
       } else {
-        const list = await cached('orders', {});
         const q = (P.q || '').trim().toLowerCase();
+        // без поиска хватает заказов за 60 дней (как и для «того же клиента»), все 6000+ — только для поиска
+        const list = await cached('orders', q ? {} : { from: iso(new Date(Date.now() - 60 * 864e5)) });
         // без поиска — свежие заказы в работе; поиском находится любой
         const rows = (q ? list.filter((o) => [o.client, o.company, o.phone, o.instagram, String(o.id)].some((v) => String(v || '').toLowerCase().includes(q)))
           : list.filter((o) => o.stage !== CLOSED && o.stage !== CANCEL)).slice(0, 30);
@@ -1448,6 +1449,8 @@
       return;
     }
     try {
+      // список заказов (первая вкладка) грузим одновременно со справочниками, а не после них
+      cached('orders', range(S.filters.period)).catch(() => {});
       const me = await window.api('me');
       S.user = me.user; setMe(me); $tabs.hidden = false;
       $tabs.querySelector('[data-tab=clients]').hidden = !isOwner(); // клиентская база — только руководителю
