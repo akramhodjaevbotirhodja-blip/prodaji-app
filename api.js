@@ -61,6 +61,7 @@
     db.payments.forEach((p) => (p.id = seq.p++));
     const user = role === 'owner'
       ? { telegram_id: 1, name: 'Руководитель (демо)', role: 'owner', code: null }
+      : role === 'spender' ? { telegram_id: 3, name: 'Расходы (демо)', role: 'spender', code: 'KS' }
       : { telegram_id: 2, name: role + ' (демо)', role: 'manager', code: role };
 
     const view = (o) => {
@@ -170,11 +171,15 @@
         return { payments: db.payments.filter((x) => inRange(x.paid_at)),
           expenses: db.expenses.filter((x) => inRange(x.spent_at)).sort((a, b) => b.spent_at.localeCompare(a.spent_at) || b.id - a.id) };
       },
+      my_expenses: (p) => {
+        const inRange = (d) => (!p.from || d >= p.from) && (!p.to || d <= p.to);
+        return { expenses: db.expenses.filter((x) => x.created_by === user.telegram_id && inRange(x.spent_at)).sort((a, b) => b.spent_at.localeCompare(a.spent_at) || b.id - a.id) };
+      },
       expense_save: (p) => {
         if (!(Number(p.amount) > 0)) throw new Error('Сумма расхода должна быть больше нуля');
         const row = { spent_at: p.spent_at || iso(new Date()), amount: Number(p.amount), category: p.category, method: p.method || 'cash', comment: p.comment || null };
         const cur = db.expenses.find((x) => x.id === Number(p.id));
-        cur ? Object.assign(cur, row) : db.expenses.push({ id: seq.e++, ...row });
+        cur ? Object.assign(cur, row) : db.expenses.push({ id: seq.e++, ...row, created_by: user.telegram_id });
         return { ok: true };
       },
       expense_delete: (p) => { db.expenses = db.expenses.filter((x) => x.id !== Number(p.id)); return { ok: true }; },

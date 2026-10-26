@@ -36,6 +36,10 @@
   const fmtDate = (s) => (s ? s.slice(8, 10) + '.' + s.slice(5, 7) + '.' + s.slice(0, 4) : '');
   const daysAgo = (s) => Math.round((new Date(today()) - new Date(s)) / 864e5);
   const isOwner = () => S.user && S.user.role === 'owner';
+  // роль «Расходы»: только вкладка расходов и «Ещё», видит только свои записи
+  const isSpender = () => S.user && S.user.role === 'spender';
+  const ROLE_NAMES = { manager: 'Менеджер (видит свои заказы)', spender: 'Расходы (вносит только расходы)', owner: 'Руководитель (видит всё)' };
+  const roleBadge = (r) => ({ owner: 'руковод.', spender: 'расходы' }[r] || 'менеджер');
   // window.confirm в Telegram Desktop не показывается и сразу возвращает false, поэтому спрашиваем через Telegram
   const ask = (msg) => new Promise((res) => (tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')
     ? tg.showConfirm(msg, res) : res(window.confirm(msg))));
@@ -81,7 +85,7 @@
     catch (e) { if (!quiet) { toast(e.message); haptic('error'); } throw e; }
   }
   // списки заказов держим минуту: фильтры и поиск переключаются без запроса к серверу
-  const READS = ['me', 'orders', 'order', 'finance', 'stock', 'stock_item'];
+  const READS = ['me', 'orders', 'order', 'finance', 'my_expenses', 'stock', 'stock_item'];
   const cache = new Map();
   function cached(action, params) {
     const k = action + JSON.stringify(params), hit = cache.get(k);
@@ -339,9 +343,12 @@
       return dashboardHtml(list.filter((o) => o.stage !== 'Отменён'), debts, r, fin, stock);
     },
 
+    // роль «Расходы»: свои расходы (тот же экран, что у руководителя из дашборда)
+    spend: () => VIEWS.expenses(),
+
     async more() {
       const u = S.user;
-      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
+      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : isSpender() ? 'Расходы · ' + esc(u.code) : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
         <div class="hint">Версия приложения ${esc(VERSION)}</div></div>`;
       if (!isOwner()) return html;
       const free = S.dicts.staff.filter((s) => s.active && !s.telegram_id).map((s) => s.code);
@@ -351,13 +358,14 @@
           <div class="hint">Telegram ID ${r.telegram_id} · ${fmtDate(String(r.created_at).slice(0, 10))}</div>
           <div class="grid2" style="margin-top:8px"><select data-f="code">${opts(free, '', 'Код сотрудника')}</select>
             <input data-f="newcode" placeholder="или новый код" autocomplete="off"></div>
+          <select data-f="role">${Object.entries(ROLE_NAMES).map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select>
           <div class="grid2"><button class="btn" data-act="reqok">Одобрить</button><button class="btn ghost" data-act="reqno">Отклонить</button></div>
         </div>`).join('')}`;
       html += `<h2>Сотрудники</h2><div class="list">${S.dicts.staff.map((s) => `
         <div class="row tap" data-act="staff" data-code="${esc(s.code)}">
           <div class="grow"><div class="title">${esc(s.code)} · ${esc(s.name || '')}</div>
           <div class="sub">${s.telegram_id ? 'Telegram ID ' + s.telegram_id : 'не привязан к Telegram'}${s.active ? '' : ' · отключён'}</div></div>
-          <span class="badge ${s.telegram_id && s.active ? 'b-green' : 'b-grey'}">${s.role === 'owner' ? 'руковод.' : 'менеджер'}</span></div>`).join('')}</div>
+          <span class="badge ${s.telegram_id && s.active ? 'b-green' : 'b-grey'}">${roleBadge(s.role)}</span></div>`).join('')}</div>
         <button class="btn ghost" data-act="staff" data-code="">+ Добавить сотрудника</button>
         <p class="hint" style="margin:8px 6px">Сотрудник открывает бота, видит свой Telegram ID и присылает его вам. Вы вписываете ID здесь.</p>
         <h2>Google-таблица дня</h2>
@@ -649,15 +657,16 @@
     // все расходы за период дашборда
     async expenses() {
       const r = S.dash.period === 'custom' ? { from: S.dash.from, to: S.dash.to } : range(S.dash.period);
-      const { expenses } = await cached('finance', r);
+      const { expenses } = await cached(isSpender() ? 'my_expenses' : 'finance', r);
+      const who = Object.fromEntries(S.dicts.staff.filter((s) => s.telegram_id).map((s) => [String(s.telegram_id), s.name || s.code]));
       S.expenses = expenses; // для открытия расхода на правку
       const total = expenses.reduce((s, e) => s + Number(e.amount), 0);
       const label = S.dash.period === 'custom' ? `${fmtDate(r.from)} — ${fmtDate(r.to)}` : periods[S.dash.period];
-      return `<h1>Расходы</h1>
+      return `<h1>Расходы</h1>${isSpender() ? chips('dperiod', periods, S.dash.period) : ''}
         <div class="hint" style="margin:0 6px 8px">${esc(label)} · ${expenses.length} записей · ${money(total)} сум</div>
         <div class="list">${expenses.map((e) => `<div class="row tap" data-act="expense" data-id="${e.id}">
           <div class="grow"><div class="title">${esc(e.category)}</div>
-          <div class="sub">${fmtDate(e.spent_at)} · ${METHODS[e.method] || ''}${e.comment ? ' · ' + esc(e.comment) : ''}</div></div>
+          <div class="sub">${fmtDate(e.spent_at)} · ${METHODS[e.method] || ''}${e.comment ? ' · ' + esc(e.comment) : ''}${who[e.created_by] && isOwner() ? ' · ' + esc(who[e.created_by]) : ''}</div></div>
           <div class="amt red"><b>${money(e.amount)}</b></div></div>`).join('') || '<div class="center hint">Расходов нет</div>'}</div>
         <button class="fab" data-act="expense" aria-label="Новый расход">+</button>`;
     },
@@ -721,7 +730,7 @@
     async form(v) {
       const o = v.data;
       const names = (k, f = 'name') => S.dicts[k].filter((x) => x.active !== false).map((x) => x[f]);
-      const staff = S.dicts.staff.filter((s) => s.active).map((s) => s.code);
+      const staff = S.dicts.staff.filter((s) => s.active && s.role !== 'spender').map((s) => s.code);
       v.after = () => { recalcForm(); if (o.design_urls?.length) copyDesigns(o.design_urls); };
       return `<h1>${o.id ? 'Заказ №' + o.id : o.repeat_of ? 'Повтор заказа №' + o.repeat_of : 'Новый заказ'}</h1>
         ${o.repeat_of ? '<p class="hint" style="margin:0 6px 10px">Проверьте суммы и дизайн — всё взято из старого заказа. Лишний дизайн уберите ✕.</p>' : ''}
@@ -769,7 +778,7 @@
           <label style="margin-top:0">Код (как в заказах: MY, SH…)</label><input id="sCode" value="${esc(s.code)}" ${s.code ? 'disabled' : ''}>
           <label>Имя</label><input id="sName" value="${esc(s.name)}">
           <label>Telegram ID</label><input id="sTg" inputmode="numeric" value="${esc(s.telegram_id || '')}" placeholder="например 123456789">
-          <label>Роль</label><select id="sRole">${['manager', 'owner'].map((r) => `<option value="${r}" ${s.role === r ? 'selected' : ''}>${r === 'owner' ? 'Руководитель (видит всё)' : 'Менеджер (видит свои заказы)'}</option>`).join('')}</select>
+          <label>Роль</label><select id="sRole">${Object.entries(ROLE_NAMES).map(([r, t]) => `<option value="${r}" ${s.role === r ? 'selected' : ''}>${t}</option>`).join('')}</select>
           <label><input type="checkbox" id="sActive" ${s.active ? 'checked' : ''} style="width:auto;min-height:0"> Активен</label>
         </div>
         <button class="btn" data-act="staffsave">Сохранить</button>`;
@@ -1081,7 +1090,8 @@
       if (!code) return toast('Выберите код сотрудника или впишите новый');
       el.disabled = true;
       try {
-        setMe(await call('access_decide', { telegram_id: Number(card.dataset.req), approve: true, code }));
+        const role = card.querySelector('[data-f=role]').value;
+        setMe(await call('access_decide', { telegram_id: Number(card.dataset.req), approve: true, code, role }));
         haptic('success'); toast(`Доступ открыт: ${code}`); render();
       } catch { el.disabled = false; }
     },
@@ -1451,7 +1461,7 @@
     if (!window.IS_DEMO) return '';
     const cur = new URLSearchParams(location.search).get('demo') || 'owner';
     return `<div class="demo-bar">Демо-режим, данные не сохраняются. Смотреть как:
-      <select data-demo>${['owner', 'MY', 'SH', 'D', 'V'].map((r) => `<option ${r === cur ? 'selected' : ''} value="${r}">${r === 'owner' ? 'руководитель' : 'менеджер ' + r}</option>`).join('')}</select></div>`;
+      <select data-demo>${['owner', 'spender', 'MY', 'SH', 'D', 'V'].map((r) => `<option ${r === cur ? 'selected' : ''} value="${r}">${r === 'owner' ? 'руководитель' : r === 'spender' ? 'расходы' : 'менеджер ' + r}</option>`).join('')}</select></div>`;
   }
 
   // ---------- старт ----------
@@ -1463,10 +1473,14 @@
     }
     try {
       // список заказов (первая вкладка) грузим одновременно со справочниками, а не после них
-      cached('orders', range(S.filters.period)).catch(() => {});
+      cached('orders', range(S.filters.period)).catch(() => {}); // у роли «Расходы» просто вернёт отказ
       const me = await window.api('me');
       S.user = me.user; setMe(me); $tabs.hidden = false;
       $tabs.querySelector('[data-tab=clients]').hidden = !isOwner(); // клиентская база — только руководителю
+      if (isSpender()) {
+        [...$tabs.children].forEach((b) => { b.hidden = !['spend', 'more'].includes(b.dataset.tab); });
+        S.tab = 'spend';
+      }
       if (new URLSearchParams(location.search).get('tab') === 'more') S.tab = 'more'; // кнопка из уведомления о заявке
       render();
     } catch (e) {
