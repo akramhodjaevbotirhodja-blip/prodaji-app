@@ -178,6 +178,7 @@
       expense_save: (p) => {
         if (!(Number(p.amount) > 0)) throw new Error('Сумма расхода должна быть больше нуля');
         const row = { spent_at: p.spent_at || iso(new Date()), amount: Number(p.amount), category: p.category, method: p.method || 'cash', comment: p.comment || null };
+        if (!demoDicts.expense_categories.some((c) => c.name === p.category)) demoDicts.expense_categories.push({ name: p.category, active: true });
         const cur = db.expenses.find((x) => x.id === Number(p.id));
         cur ? Object.assign(cur, row) : db.expenses.push({ id: seq.e++, ...row, created_by: user.telegram_id });
         return { ok: true };

@@ -38,6 +38,16 @@
   const isOwner = () => S.user && S.user.role === 'owner';
   // роль «Расходы»: только вкладка расходов и «Ещё», видит только свои записи
   const isSpender = () => S.user && S.user.role === 'spender';
+  // «➕ Новый вид расхода»: свой вид вписывают в поле под списком, сервер добавит его в справочник
+  const NEW_CAT = '__new';
+  function expenseCategory() {
+    const v = document.getElementById('exCat').value;
+    if (v !== NEW_CAT) return v;
+    const name = document.getElementById('exCatNew').value.trim().replace(/\s+/g, ' ');
+    // «бензин» при существующем «Бензин» — берём уже имеющийся, без дубля
+    const same = S.dicts.expense_categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
+    return same ? same.name : name.slice(0, 60);
+  }
   const ROLE_NAMES = { manager: 'Менеджер (видит свои заказы)', spender: 'Расходы (вносит только расходы)', owner: 'Руководитель (видит всё)' };
   const roleBadge = (r) => ({ owner: 'руковод.', spender: 'расходы' }[r] || 'менеджер');
   // window.confirm в Telegram Desktop не показывается и сразу возвращает false, поэтому спрашиваем через Telegram
@@ -675,9 +685,12 @@
     async expense(v) {
       const e = v.data || { spent_at: today(), method: 'cash' };
       const cats = S.dicts.expense_categories.map((c) => c.name);
+      if (e.category && !cats.includes(e.category)) cats.push(e.category); // вид убрали из справочника, а запись осталась
       return `<h1>${e.id ? 'Расход' : 'Новый расход'}</h1>
         <div class="card">
-          <label style="margin-top:0">Вид расхода</label><select id="exCat">${opts(cats, e.category, 'Выберите')}</select>
+          <label style="margin-top:0">Вид расхода</label><select id="exCat" data-input="excat">${opts(cats, e.category, 'Выберите')}
+            <option value="${NEW_CAT}">➕ Новый вид расхода…</option></select>
+          <input id="exCatNew" placeholder="Название, например «Ремонт принтера»" autocomplete="off" hidden>
           <div class="grid2"><div><label>${K_LABEL}</label><input type="number" inputmode="decimal" id="exAmount" value="${kIn(e.amount)}" placeholder="50 = 50 000"></div>
           <div><label>Дата</label><input type="date" id="exDate" value="${e.spent_at}"></div></div>
           <label>Чем платили</label>${segHtml('exmethod', e.method)}
@@ -883,13 +896,18 @@
     },
     async exsave(el) {
       const v = S.stack[S.stack.length - 1];
-      const row = { id: v.data?.id, category: document.getElementById('exCat').value, amount: kOut(document.getElementById('exAmount').value),
+      const row = { id: v.data?.id, category: expenseCategory(), amount: kOut(document.getElementById('exAmount').value),
         spent_at: document.getElementById('exDate').value, method: segVal('exmethod'), comment: document.getElementById('exComment').value };
       if (!row.category) return toast('Выберите вид расхода');
       if (!(row.amount > 0)) return toast('Введите сумму');
       if (!(await bigOk([row.amount]))) return;
       el.disabled = true;
-      try { await call('expense_save', row); haptic('success'); toast('Расход сохранён'); pop(); }
+      try {
+        await call('expense_save', row); haptic('success'); toast('Расход сохранён');
+        // новый вид сервер добавил в справочник — сразу показываем его в списке
+        if (!S.dicts.expense_categories.some((c) => c.name === row.category)) S.dicts.expense_categories.push({ name: row.category });
+        pop();
+      }
       catch { el.disabled = false; }
     },
     async exdel() {
@@ -1311,6 +1329,11 @@
     if (k === 'scmonth' && e.target.value) { S.stack[S.stack.length - 1].month = e.target.value; render(); } // подставить внесённое за тот месяц
     if (e.target.dataset.demo !== undefined) { location.search = '?demo=' + e.target.value; }
     if (k === 'source') document.getElementById('igField').hidden = !isInstagram(e.target.value);
+    if (k === 'excat') {
+      const box = document.getElementById('exCatNew');
+      box.hidden = e.target.value !== NEW_CAT;
+      if (!box.hidden) box.focus();
+    }
     const file = e.target.files && e.target.files[0];
     if (file && e.target.dataset.receiptNew !== undefined) {
       try {
