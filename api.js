@@ -76,7 +76,7 @@
     };
     const sees = (o) => user.role === 'owner' || (user.role === 'designer'
       ? [o.designer_code, o.designer2_code].some((c) => c && c.toUpperCase() === user.code.toUpperCase()) || o.created_by === user.telegram_id
-        || (o.created_by == null && o.stage === 'Дизайн готов') : o.manager_code === user.code);
+        || (o.created_by == null && o.stage === 'Дизайн готов' && (!o.created_at || o.created_at >= new Date(Date.now() - 7 * 864e5).toISOString())) : o.manager_code === user.code);
     const find = (id) => {
       const o = db.orders.find((x) => x.id === Number(id));
       if (!o) throw new Error('Заказ не найден');
