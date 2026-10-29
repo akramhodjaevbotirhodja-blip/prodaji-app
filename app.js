@@ -148,10 +148,12 @@
   // orderId — карточка заказа: дизайн сохраняется сразу; без него (форма) — после сохранения заказа
   // дизайнов может быть сколько угодно: каждый Ctrl+V / файл добавляет ещё один
   const designPicker = (orderId) => `<div class="drop" data-pz="design" style="margin:10px 0 0">
-      <div class="drop-head"><b>🎨 Дизайн</b><label class="btn sm ghost">📎 Файлы<input type="file" accept="image/*" multiple hidden
+      <div class="drop-head"><b>🎨 Дизайн</b><label class="btn sm ghost">📎 Файлы<input type="file" accept="${DESIGN_ACCEPT}" multiple hidden
         ${orderId ? `data-design-for="${orderId}"` : 'data-design-new'}></label></div>
       <div class="designs" id="designList"></div>
-      <div class="drop-empty hint" id="designEmpty">Нажмите сюда, затем Ctrl+V — дизайн, который утвердил клиент. Можно несколько</div></div>`;
+      <div class="drop-empty hint" id="designEmpty">Перетащите сюда картинку или файл .cdr / .pdf, или нажмите и Ctrl+V. Можно несколько</div></div>`;
+  // картинка — в «Утверждённый дизайн», остальное (.cdr, .pdf, .ai…) — в «Файл дизайна»
+  const DESIGN_ACCEPT = 'image/*,.cdr,.pdf,.ai,.eps,.psd,.svg,.zip,.rar';
   // миниатюры ещё не сохранённых дизайнов; act — действие кнопки «✕» (data-i — номер в списке)
   const designThumbs = (list, act) => list.map((src, i) => `<div class="design"><img src="${src}" alt="Дизайн ${i + 1}">
       <button data-act="${act}" data-i="${i}" aria-label="Убрать">✕</button></div>`).join('');
@@ -1402,7 +1404,7 @@
       for (const f of e.target.dataset.paste === 'design' ? files : [file]) await setPaste(e.target.dataset.paste, f);
       e.target.value = '';
     }
-    if (file && (e.target.dataset.designFor || e.target.dataset.designNew !== undefined)) { await putDesigns(files); e.target.value = ''; }
+    if (file && (e.target.dataset.designFor || e.target.dataset.designNew !== undefined)) { await putAnyDesign(files); e.target.value = ''; }
     if (file && e.target.dataset.fileNew !== undefined) { S.files.push(...files); paintFiles(); e.target.value = ''; }
     if (file && e.target.dataset.fileFor) {
       let ok = 0;
@@ -1514,6 +1516,24 @@
     paintDesigns();
     haptic('success'); toast(`Дизайнов: ${S.designs.length} — сохранятся вместе с заказом`);
   }
+  const isImage = (f) => f.type.startsWith('image/') && !/\.(cdr|ai|eps|psd)$/i.test(f.name);
+  async function putAnyDesign(files) {
+    const images = files.filter(isImage), others = files.filter((f) => !isImage(f));
+    if (others.length) await putDesignFiles(others);
+    if (images.length) await putDesigns(images);
+  }
+  // в карточке заказа файл грузится сразу, в форме — вместе с заказом
+  async function putDesignFiles(files) {
+    const forId = $app.querySelector('[data-file-for]')?.dataset.fileFor;
+    if (forId) {
+      let ok = 0;
+      for (const f of files) { toast(`Загружаю ${f.name}…`); if (await uploadFile(Number(forId), f)) ok++; }
+      if (ok) { haptic('success'); toast(ok > 1 ? `Загружено файлов: ${ok}` : 'Файл загружен'); render(); }
+    } else if ($app.querySelector('[data-file-new]')) {
+      S.files.push(...files); paintFiles();
+      haptic('success'); toast(`Файлов: ${S.files.length} — загрузятся вместе с заказом`);
+    } else toast('Откройте заказ, чтобы прикрепить файл дизайна');
+  }
   const putPz = async (kind, files) => {
     if (kind === 'design') return putDesigns(files);
     try { showReceipt(await readReceipt(files[0])); } catch (err) { toast(err.message); }
@@ -1545,22 +1565,36 @@
     if ($app.querySelector(`[data-pz=${S.pz}]`)) { e.preventDefault(); putPz(S.pz, files); }
     else toast('Здесь некуда вставить картинку — откройте раздел «📎 Чеки»');
   });
-  $app.addEventListener('dragover', (e) => {
-    const z = e.target.closest(isPasteTab() ? '[data-zone]' : '[data-pz]');
-    if (z) { e.preventDefault(); z.classList.add('over'); }
+  // перетаскивание: файл никогда не открывается в окне Telegram; картинка — в чек или дизайн, .cdr / .pdf — в «Файл дизайна»
+  const hasFiles = (e) => [...((e.dataTransfer && e.dataTransfer.types) || [])].includes('Files');
+  document.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    const z = e.target.closest && e.target.closest(isPasteTab() ? '[data-zone]' : '[data-pz]');
+    if (z) z.classList.add('over');
   });
-  $app.addEventListener('dragleave', (e) => { const z = e.target.closest('[data-zone], [data-pz]'); if (z) z.classList.remove('over'); });
-  $app.addEventListener('drop', (e) => {
-    const z = e.target.closest(isPasteTab() ? '[data-zone]' : '[data-pz]');
-    if (!z) return;
-    e.preventDefault(); z.classList.remove('over');
-    const files = imageFiles(e.dataTransfer);
-    if (!files.length) return toast('Перетащите картинку');
-    if (z.dataset.zone) {
+  document.addEventListener('dragleave', (e) => { const z = e.target.closest && e.target.closest('[data-zone], [data-pz]'); if (z) z.classList.remove('over'); });
+  document.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    const z = e.target.closest && e.target.closest(isPasteTab() ? '[data-zone]' : '[data-pz]');
+    if (z) z.classList.remove('over');
+    const all = [...e.dataTransfer.files];
+    if (isPasteTab()) {
+      const files = all.filter(isImage);
+      if (!z || !files.length) return toast('Перетащите картинку в чек или дизайн');
       const k = z.dataset.zone;
       S.paste.target = k;
       (async () => { for (const f of k === 'design' ? files : files.slice(0, 1)) await setPaste(k, f); })();
-    } else { S.pz = z.dataset.pz; paintPz(); putPz(z.dataset.pz, files); }
+      return;
+    }
+    const images = all.filter(isImage), others = all.filter((f) => !isImage(f));
+    if (others.length) putDesignFiles(others);
+    if (!images.length) return;
+    // картинку — туда, куда бросили (чек или дизайн); мимо зон — в дизайн
+    const kind = z ? z.dataset.pz : $app.querySelector('[data-pz=design]') ? 'design' : null;
+    if (!kind) return toast('Здесь некуда прикрепить картинку');
+    S.pz = kind; paintPz(); putPz(kind, images);
   });
 
   function demoBar() {
