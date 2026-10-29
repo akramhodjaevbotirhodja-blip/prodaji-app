@@ -44,6 +44,17 @@
   const myDesignerCode = () => (S.dicts.designers.find((d) => d.code.toUpperCase() === String(S.user.code).toUpperCase()) || {}).code || '';
   // «➕ Новый вид расхода»: свой вид вписывают в поле под списком, сервер добавит его в справочник
   const NEW_CAT = '__new';
+  // строка «товар + количество» (приход, списание, закуп в расходе)
+  function addMoveRow(product = '', qty = '') {
+    const names = S.dicts.products.filter((x) => x.active !== false).map((x) => x.name);
+    if (product && !names.includes(product)) names.push(product);
+    document.getElementById('moveItems').insertAdjacentHTML('beforeend', `<div class="mv">
+      <select data-f="product">${opts(names, product, 'Товар')}</select>
+      <input type="number" inputmode="numeric" min="0" data-f="qty" placeholder="шт." value="${esc(qty)}">
+      <button data-act="mvdel" aria-label="Убрать">×</button></div>`);
+  }
+  const moveRows = () => [...document.querySelectorAll('#moveItems .mv')].map((r) => ({
+    product: r.querySelector('[data-f=product]').value, qty: Number(r.querySelector('[data-f=qty]').value) }));
   function expenseCategory() {
     const v = document.getElementById('exCat').value;
     if (v !== NEW_CAT) return v;
@@ -681,7 +692,7 @@
         <div class="hint" style="margin:0 6px 8px">${esc(label)} · ${expenses.length} записей · ${money(total)} сум</div>
         <div class="list">${expenses.map((e) => `<div class="row tap" data-act="expense" data-id="${e.id}">
           <div class="grow"><div class="title">${esc(e.category)}</div>
-          <div class="sub">${fmtDate(e.spent_at)} · ${METHODS[e.method] || ''}${e.comment ? ' · ' + esc(e.comment) : ''}${who[e.created_by] && isOwner() ? ' · ' + esc(who[e.created_by]) : ''}</div></div>
+          <div class="sub">${fmtDate(e.spent_at)} · ${METHODS[e.method] || ''}${e.goods?.length ? ' · 📦 ' + e.goods.map((g) => g.product + ' ×' + Number(g.qty)).join(', ') : ''}${e.comment ? ' · ' + esc(e.comment) : ''}${who[e.created_by] && isOwner() ? ' · ' + esc(who[e.created_by]) : ''}</div></div>
           <div class="amt red"><b>${money(e.amount)}</b></div></div>`).join('') || '<div class="center hint">Расходов нет</div>'}</div>
         <button class="fab" data-act="expense" aria-label="Новый расход">+</button>`;
     },
@@ -689,6 +700,7 @@
     // новый расход или правка
     async expense(v) {
       const e = v.data || { spent_at: today(), method: 'cash' };
+      v.after = () => (e.goods || []).forEach((g) => addMoveRow(g.product, Number(g.qty)));
       const cats = S.dicts.expense_categories.map((c) => c.name);
       if (e.category && !cats.includes(e.category)) cats.push(e.category); // вид убрали из справочника, а запись осталась
       return `<h1>${e.id ? 'Расход' : 'Новый расход'}</h1>
@@ -701,6 +713,10 @@
           <label>Чем платили</label>${segHtml('exmethod', e.method)}
           <label>Комментарий</label><input id="exComment" value="${esc(e.comment)}" placeholder="например: бумага, 5 пачек" autocomplete="off">
         </div>
+        <div class="card"><label style="margin-top:0">Закуп: купленный товар</label>
+          <div class="hint">Если купили товар для склада — добавьте его, он сам попадёт в приход.</div>
+          <div id="moveItems"></div>
+          <button class="btn sm ghost" style="margin-top:8px" data-act="mvadd">+ Товар на склад</button></div>
         <button class="btn" data-act="exsave">Сохранить расход</button>
         ${e.id ? '<button class="btn danger" data-act="exdel">Удалить расход</button>' : ''}`;
     },
@@ -904,6 +920,9 @@
       const v = S.stack[S.stack.length - 1];
       const row = { id: v.data?.id, category: expenseCategory(), amount: kOut(document.getElementById('exAmount').value),
         spent_at: document.getElementById('exDate').value, method: segVal('exmethod'), comment: document.getElementById('exComment').value };
+      const goods = moveRows();
+      if (goods.some((g) => g.product && !(g.qty > 0))) return toast('Укажите количество товара');
+      row.goods = goods.filter((g) => g.product && g.qty > 0);
       if (!row.category) return toast('Выберите вид расхода');
       if (!(row.amount > 0)) return toast('Введите сумму');
       if (!(await bigOk([row.amount]))) return;
@@ -1129,18 +1148,11 @@
     stockitem: (el) => push({ type: 'stockitem', product: el.dataset.v }),
     stockin: (el) => push({ type: 'stockin', kind: el.dataset.v }),
     stockcount: () => push({ type: 'stockcount' }),
-    mvadd: () => {
-      const names = S.dicts.products.filter((x) => x.active !== false).map((x) => x.name);
-      document.getElementById('moveItems').insertAdjacentHTML('beforeend', `<div class="mv">
-        <select data-f="product">${opts(names, '', 'Товар')}</select>
-        <input type="number" inputmode="numeric" min="0" data-f="qty" placeholder="шт.">
-        <button data-act="mvdel" aria-label="Убрать">×</button></div>`);
-    },
+    mvadd: () => addMoveRow(),
     mvdel: (el) => el.closest('.mv').remove(),
     async mvsave(el) {
       const v = S.stack[S.stack.length - 1];
-      const items = [...document.querySelectorAll('#moveItems .mv')].map((r) => ({
-        product: r.querySelector('[data-f=product]').value, qty: Number(r.querySelector('[data-f=qty]').value) }));
+      const items = moveRows();
       if (items.some((i) => i.product && !(i.qty > 0))) return toast('Укажите количество');
       const ok = items.filter((i) => i.product && i.qty > 0);
       if (!ok.length) return toast('Выберите товар и количество');

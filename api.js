@@ -183,11 +183,19 @@
         if (!(Number(p.amount) > 0)) throw new Error('Сумма расхода должна быть больше нуля');
         const row = { spent_at: p.spent_at || iso(new Date()), amount: Number(p.amount), category: p.category, method: p.method || 'cash', comment: p.comment || null };
         if (!demoDicts.expense_categories.some((c) => c.name === p.category)) demoDicts.expense_categories.push({ name: p.category, active: true });
-        const cur = db.expenses.find((x) => x.id === Number(p.id));
-        cur ? Object.assign(cur, row) : db.expenses.push({ id: seq.e++, ...row, created_by: user.telegram_id });
+        row.goods = (p.goods || []).filter((g) => g.product && Number(g.qty) > 0).map((g) => ({ product: g.product, qty: Number(g.qty) }));
+        let cur = db.expenses.find((x) => x.id === Number(p.id));
+        if (cur) Object.assign(cur, row); else db.expenses.push(cur = { id: seq.e++, ...row, created_by: user.telegram_id });
+        // как сервер: закуп приходует товар на склад, приход пересобирается при правке
+        db.moves = db.moves.filter((m) => m.expense_id !== cur.id);
+        row.goods.forEach((g) => db.moves.push({ id: seq.m++, ...g, kind: 'in', moved_at: row.spent_at, comment: 'Закуп: ' + (row.comment || row.category), expense_id: cur.id }));
         return { ok: true };
       },
-      expense_delete: (p) => { db.expenses = db.expenses.filter((x) => x.id !== Number(p.id)); return { ok: true }; },
+      expense_delete: (p) => {
+        db.expenses = db.expenses.filter((x) => x.id !== Number(p.id));
+        db.moves = db.moves.filter((m) => m.expense_id !== Number(p.id));
+        return { ok: true };
+      },
       stock: () => demoDicts.products.filter((x) => x.active !== false).map((x, i) => {
         const c = db.counts.filter((r) => r.product === x.name).sort((a, b) => b.month.localeCompare(a.month))[0];
         const mv = db.moves.filter((m) => m.product === x.name);
