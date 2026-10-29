@@ -62,7 +62,7 @@
     const user = role === 'owner'
       ? { telegram_id: 1, name: 'Руководитель (демо)', role: 'owner', code: null }
       : role === 'spender' ? { telegram_id: 3, name: 'Расходы (демо)', role: 'spender', code: 'KS' }
-      : role === 'designer' ? { telegram_id: 4, name: 'Дизайнер (демо)', role: 'designer', code: 'IK' }
+      : role === 'designer' ? { telegram_id: 4, name: 'Дизайнер (демо)', role: 'designer', code: 'ZU' }
       : { telegram_id: 2, name: role + ' (демо)', role: 'manager', code: role };
 
     const view = (o) => {
@@ -75,7 +75,7 @@
         paid_click: sum(pays, 'click'), paid_paymi: sum(pays, 'paymi'), paid_card: sum(pays, 'card'), paid_terminal: sum(pays, 'terminal'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
     };
     const sees = (o) => user.role === 'owner' || (user.role === 'designer'
-      ? [o.designer_code, o.designer2_code].includes(user.code) || o.created_by === user.telegram_id : o.manager_code === user.code);
+      ? [o.designer_code, o.designer2_code].some((c) => c && c.toUpperCase() === user.code.toUpperCase()) || o.created_by === user.telegram_id : o.manager_code === user.code);
     const find = (id) => {
       const o = db.orders.find((x) => x.id === Number(id));
       if (!o) throw new Error('Заказ не найден');

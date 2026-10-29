@@ -40,6 +40,8 @@
   const isSpender = () => S.user && S.user.role === 'spender';
   // роль «Дизайнер»: видит заказы, где он дизайнер (и которые сам открыл), менеджера в заказе выбирает сам
   const isDesigner = () => S.user && S.user.role === 'designer';
+  // код сотрудника заглавный (ZU), в справочнике дизайнеров — Zu
+  const myDesignerCode = () => (S.dicts.designers.find((d) => d.code.toUpperCase() === String(S.user.code).toUpperCase()) || {}).code || '';
   // «➕ Новый вид расхода»: свой вид вписывают в поле под списком, сервер добавит его в справочник
   const NEW_CAT = '__new';
   function expenseCategory() {
@@ -754,7 +756,7 @@
         <div class="card">
           <div class="grid2"><div><label>Дата</label><input type="date" name="order_date" value="${o.order_date || today()}"></div>
           <div><label>Менеджер</label>${pickManager ? `<select name="manager_code">${opts(staff, o.manager_code || (isOwner() ? S.user.code : ''))}</select>` : `<input value="${esc(S.user.code)}" disabled>`}</div></div>
-          <div class="grid2"><div><label>Дизайнер</label><select name="designer_code">${opts(names('designers', 'code'), o.designer_code || (!o.id && isDesigner() ? S.user.code : ''))}</select></div>
+          <div class="grid2"><div><label>Дизайнер</label><select name="designer_code">${opts(names('designers', 'code'), o.designer_code || (!o.id && isDesigner() ? myDesignerCode() : ''))}</select></div>
           <div><label>Источник</label><select name="source" data-input="source">${opts(names('sources'), o.source)}</select></div></div>
           ${o.designer2_code ? `<label>2-й дизайнер (из объединённого заказа)</label>
             <select name="designer2_code">${opts(names('designers', 'code'), o.designer2_code, 'нет')}</select>` : ''}
