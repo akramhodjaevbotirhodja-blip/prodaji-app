@@ -1,5 +1,8 @@
 (function () {
   const tg = window.Telegram && window.Telegram.WebApp;
+  // Telegram на компьютере открывает приложение маленьким окном — дашборд можно развернуть на весь экран (Bot API 8.0)
+  const onDesktop = () => !!(tg && tg.initData && ['tdesktop', 'macos', 'web', 'weba', 'webk'].includes(tg.platform));
+  const fullOk = () => !!(tg && tg.isVersionAtLeast && tg.isVersionAtLeast('8.0') && tg.requestFullscreen);
   const VERSION = (String(document.currentScript && document.currentScript.src).match(/v=(\w+)/) || [])[1] || '—';
   const $app = document.getElementById('app');
   const $tabs = document.getElementById('tabs');
@@ -514,7 +517,7 @@
     const dmax = Math.max(1, ...days.map((d) => d[1]));
     const mgr = group(list, 'manager_code');
 
-    return `<h1>Дашборд</h1>
+    return `<h1 class="dash-h1">Дашборд${onDesktop() ? `<button class="btn sm ghost" data-act="fullscreen">${tg.isFullscreen ? '✕ Свернуть' : '⛶ На весь экран'}</button>` : ''}</h1>
       ${chips('dperiod', { ...periods, custom: 'Период…' }, p.period)}
       ${p.period === 'custom' ? `<div class="grid2" style="margin-bottom:10px"><input type="date" value="${p.from}" data-input="dfrom"><input type="date" value="${p.to}" data-input="dto"></div>` : ''}
       <div class="dash"><div class="kpis dash-top">
@@ -1154,6 +1157,10 @@
     stockitem: (el) => push({ type: 'stockitem', product: el.dataset.v }),
     stockin: (el) => push({ type: 'stockin', kind: el.dataset.v }),
     stockcount: () => push({ type: 'stockcount' }),
+    fullscreen: () => {
+      if (!fullOk()) return toast('Этот Telegram не умеет полный экран — обновите Telegram Desktop');
+      tg.isFullscreen ? tg.exitFullscreen() : tg.requestFullscreen();
+    },
     mvadd: () => addMoveRow(),
     mvdel: (el) => el.closest('.mv').remove(),
     async mvsave(el) {
@@ -1514,6 +1521,11 @@
   // ---------- старт ----------
   async function start() {
     if (tg) { tg.ready(); tg.expand(); if (tg.initData) document.documentElement.classList.add('tg'); }
+    if (tg && tg.onEvent) {
+      tg.onEvent('fullscreenChanged', () => render());
+      tg.onEvent('fullscreenFailed', (e) => toast(e && e.error === 'UNSUPPORTED'
+        ? 'Этот Telegram не умеет полный экран — обновите Telegram Desktop' : 'Не удалось открыть на весь экран'));
+    }
     if (!window.IS_DEMO && !(tg && tg.initData)) {
       $app.innerHTML = '<div class="center"><h1>Откройте через Telegram</h1><p class="hint">Это приложение работает внутри бота. Для просмотра без Telegram добавьте к адресу <b>?demo</b>.</p></div>';
       return;
