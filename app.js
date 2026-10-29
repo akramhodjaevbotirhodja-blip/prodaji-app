@@ -246,6 +246,8 @@
       html = `<div class="center"><p>${esc(e.message)}</p><button class="btn ghost" data-act="reload">Повторить</button></div>`;
     }
     if (token !== render.token) return;
+    // дашборд на компьютере — во всю ширину окна, разделы в несколько колонок (см. .dash в style.css)
+    $app.classList.toggle('wide', !view && S.tab === 'dashboard');
     $app.innerHTML = demoBar() + html;
     paintPz();
     if ($app.querySelector('[data-zone]')) paintPaste(); // картинки раздела «Чек и дизайн» — из S.paste
@@ -493,6 +495,8 @@
       <button class="btn ghost" data-act="stock">Склад: все товары →</button>`;
   }
 
+  // раздел дашборда: на компьютере разделы встают колонками и не разрываются
+  const sec = (html) => (html ? `<section>${html}</section>` : '');
   function dashboardHtml(list, debts, r, fin, stock) {
     const p = S.dash;
     const sum = list.reduce((s, o) => s + o.total, 0), paid = list.reduce((s, o) => s + o.paid, 0);
@@ -513,7 +517,7 @@
     return `<h1>Дашборд</h1>
       ${chips('dperiod', { ...periods, custom: 'Период…' }, p.period)}
       ${p.period === 'custom' ? `<div class="grid2" style="margin-bottom:10px"><input type="date" value="${p.from}" data-input="dfrom"><input type="date" value="${p.to}" data-input="dto"></div>` : ''}
-      <div class="kpis">
+      <div class="dash"><div class="kpis dash-top">
         <div class="kpi"><div class="k">Заказов</div><div class="v">${list.length}</div></div>
         <div class="kpi"><div class="k">Средний чек</div><div class="v">${money(priced ? sum / priced : 0)}</div></div>
         <div class="kpi wide"><div class="k">Сумма заказов</div><div class="v">${money(sum)} сум</div>
@@ -521,31 +525,33 @@
           <div class="hint" style="margin-top:4px"><span class="green">получено ${money(paid)}</span> · <span class="red">не получено ${money(sum - paid)}</span> · собрано ${sum ? Math.round((paid / sum) * 100) : 0}%</div></div>
         <div class="kpi wide alert tap" data-act="tab" data-v="debtors"><div class="k">Долг всего, за всё время →</div><div class="v">${money(debtAll)} сум</div><div class="hint">${debts.length} заказов</div></div>
       </div>
-      ${stockHtml(stock)}
-      ${financeHtml(fin)}
-      ${isOwner() ? `<h2>Менеджеры</h2><div class="list">${mgr.map((g) => `<div class="row" style="display:block">
+      <div class="dash-cols">
+      ${sec(stockHtml(stock))}
+      ${sec(financeHtml(fin))}
+      ${isOwner() ? `<section><h2>Менеджеры</h2><div class="list">${mgr.map((g) => `<div class="row" style="display:block">
           <div style="display:flex;justify-content:space-between"><b>${esc(g.k)}</b><span class="amt"><b>${money(g.sum)}</b> · ${g.n} зак.</span></div>
           <div class="bar"><i class="paid" style="width:${g.sum ? (g.paid / g.sum) * 100 : 0}%"></i><i class="rest" style="width:${g.sum ? (g.rest / g.sum) * 100 : 0}%"></i></div>
-          <div class="hint" style="margin-top:3px">собрано ${g.sum ? Math.round((g.paid / g.sum) * 100) : 0}% · <span class="red">не получено ${money(g.rest)}</span></div></div>`).join('') || '<div class="center hint">Нет данных</div>'}</div>` : ''}
-      <h2>Этапы заказов</h2>${bars(flow().map((s) => { const g = list.filter((o) => o.stage === s); return { k: `${stageNo({ stage: s })}. ${s}`, sum: g.length, total: g.reduce((a, o) => a + o.total, 0) }; }),
-        (g) => `${g.sum} зак. · ${money(g.total)}`)}
-      <h2>Продажи по дням</h2>
+          <div class="hint" style="margin-top:3px">собрано ${g.sum ? Math.round((g.paid / g.sum) * 100) : 0}% · <span class="red">не получено ${money(g.rest)}</span></div></div>`).join('') || '<div class="center hint">Нет данных</div>'}</div></section>` : ''}
+      <section><h2>Этапы заказов</h2>${bars(flow().map((s) => { const g = list.filter((o) => o.stage === s); return { k: `${stageNo({ stage: s })}. ${s}`, sum: g.length, total: g.reduce((a, o) => a + o.total, 0) }; }),
+        (g) => `${g.sum} зак. · ${money(g.total)}`)}</section>
+      <section><h2>Продажи по дням</h2>
       <div class="card"><div class="days">${days.map(([d, v]) => `<div title="${fmtDate(d)}: ${money(v)}" style="height:${(v / dmax) * 100}%"></div>`).join('')}</div>
-        <div class="days-labels"><span>${fmtDate(from).slice(0, 5)}</span><span>${fmtDate(to).slice(0, 5)}</span></div></div>
-      <h2>Продукты</h2>
+        <div class="days-labels"><span>${fmtDate(from).slice(0, 5)}</span><span>${fmtDate(to).slice(0, 5)}</span></div></div></section>
+      <section><h2>Продукты</h2>
       <div class="kpis" style="margin-bottom:8px">
         <div class="kpi"><div class="k">Продуктов в заказе, в среднем</div><div class="v">${list.length ? (items.length / list.length).toFixed(1).replace('.', ',') : 0}</div></div>
         <div class="kpi"><div class="k">Заказов с 2+ продуктами</div><div class="v">${list.filter((o) => o.items.length > 1).length}</div></div>
-      </div>${bars([...prod.values()].sort((a, b) => b.sum - a.sum), (g) => `${money(g.sum)} · ${g.orders.size} зак. · ${g.qty} шт.`)}
-      <h2>Источники клиентов</h2>${bars(group(list, 'source'), (g) => `${money(g.sum)} · ${g.n} зак.`)}
-      <h2>Дизайнеры</h2>${bars(group(list.flatMap((o) => (o.designer2_code ? [o, { ...o, designer_code: o.designer2_code }] : [o])), 'designer_code'),
+      </div>${bars([...prod.values()].sort((a, b) => b.sum - a.sum), (g) => `${money(g.sum)} · ${g.orders.size} зак. · ${g.qty} шт.`)}</section>
+      <section><h2>Источники клиентов</h2>${bars(group(list, 'source'), (g) => `${money(g.sum)} · ${g.n} зак.`)}</section>
+      <section><h2>Дизайнеры</h2>${bars(group(list.flatMap((o) => (o.designer2_code ? [o, { ...o, designer_code: o.designer2_code }] : [o])), 'designer_code'),
         (g) => `${money(g.sum)} · ${g.n} зак.`)}
-      ${list.some((o) => o.designer2_code) ? '<div class="hint" style="margin:4px 6px 0">Заказ с двумя дизайнерами засчитан обоим</div>' : ''}
-      <h2>Доставка</h2>${bars(group(list, (o) => DELIVERY[o.delivery_type] || 'Не указано'), (g) => `${g.n} зак. · ${money(g.sum)}`)}
+      ${list.some((o) => o.designer2_code) ? '<div class="hint" style="margin:4px 6px 0">Заказ с двумя дизайнерами засчитан обоим</div>' : ''}</section>
+      <section><h2>Доставка</h2>${bars(group(list, (o) => DELIVERY[o.delivery_type] || 'Не указано'), (g) => `${g.n} зак. · ${money(g.sum)}`)}</section>
       ${(() => { const reg = list.filter((o) => o.delivery_type === 'Область');
-        return reg.length ? `<h2>Отправки по областям</h2>${bars(group(reg, 'delivery_region'), (g) => `${g.n} зак. · ${money(g.sum)}`)}
-          <h2>Службы доставки</h2>${bars(group(list.filter((o) => o.delivery_service), 'delivery_service'), (g) => `${g.n} зак.`)}` : ''; })()}
-      <h2>Способы оплаты</h2>${bars(pays.filter((x) => x.sum), (g) => `${money(g.sum)} · ${Math.round((g.sum / payTotal) * 100)}%`)}
+        return reg.length ? `<section><h2>Отправки по областям</h2>${bars(group(reg, 'delivery_region'), (g) => `${g.n} зак. · ${money(g.sum)}`)}</section>
+          <section><h2>Службы доставки</h2>${bars(group(list.filter((o) => o.delivery_service), 'delivery_service'), (g) => `${g.n} зак.`)}</section>` : ''; })()}
+      <section><h2>Способы оплаты</h2>${bars(pays.filter((x) => x.sum), (g) => `${money(g.sum)} · ${Math.round((g.sum / payTotal) * 100)}%`)}</section>
+      </div></div>
       <p class="hint" style="margin:10px 6px">Отменённые заказы не учитываются. Период считается по дате заказа.</p>`;
   }
 

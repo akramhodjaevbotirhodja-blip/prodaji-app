@@ -164,6 +164,16 @@ label { display: block; font-size: 13px; color: var(--hint); margin: 10px 2px 4p
 .bar i.paid { background: var(--green); } .bar i.rest { background: var(--red); opacity: .8; }
 .days { display: flex; align-items: flex-end; gap: 3px; height: 110px; padding: 8px 4px 0; }
 .days div { flex: 1; background: var(--btn); border-radius: 3px 3px 0 0; min-height: 2px; position: relative; }
+/* дашборд на компьютере: окно шире 900px — верхние цифры в один ряд, разделы в 2–3 колонки */
+@media (min-width: 900px) {
+  #app.wide { max-width: 1400px; padding-left: 20px; padding-right: 20px; }
+  .dash-top { grid-template-columns: repeat(4, 1fr); }
+  .dash-top .kpi.wide { grid-column: auto; }
+  .dash-cols { columns: 2; column-gap: 20px; }
+  .dash-cols > section { break-inside: avoid; display: inline-block; width: 100%; }
+  .dash .days { height: 160px; }
+}
+@media (min-width: 1300px) { .dash-cols { columns: 3; } }
 .days-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--hint); padding: 4px 4px 0; }
 
 #tabs { position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: var(--bg); border-top: 1px solid var(--sep);
