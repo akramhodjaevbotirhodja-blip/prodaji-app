@@ -78,6 +78,9 @@ label { display: block; font-size: 13px; color: var(--hint); margin: 10px 2px 4p
 
 .item { display: grid; grid-template-columns: 80px 1fr 34px; gap: 6px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--sep); }
 .item .iname { grid-column: 1 / -1; font-weight: 600; }
+/* размер / материал продукта (у таблички — размер и цвет рядом) */
+.item .idet { grid-column: 1 / -1; }
+.item .ipair { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .inks { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .inks:not(.open) .ink:not(.on) { display: none; }
 .inks:not(.open) .ink.on::after { content: '▾'; margin-left: 2px; opacity: .6; }

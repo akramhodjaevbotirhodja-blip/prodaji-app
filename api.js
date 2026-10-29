@@ -57,7 +57,8 @@
     db.moves = [{ id: 1, product: 'Штамп', kind: 'in', qty: 5, moved_at: iso(today), comment: 'поставка' }];
     demoDicts.products.find((x) => x.name === 'Печать автомат').min_qty = 50;
     demoDicts.products.find((x) => x.name === 'Штамп').min_qty = 10;
-    let seq = { o: Math.max(0, ...db.orders.map((o) => o.id)), p: 1, e: 3, d: 1, m: 2 };
+    let seq = { o: Math.max(0, ...db.orders.map((o) => o.id)), p: 1, e: 3, d: 1, m: 2, f: 1 };
+    db.files = [];
     db.payments.forEach((p) => (p.id = seq.p++));
     const user = role === 'owner'
       ? { telegram_id: 1, name: 'Руководитель (демо)', role: 'owner', code: null }
@@ -71,7 +72,7 @@
       const sum = (arr, m) => arr.filter((p) => !m || p.method === m).reduce((s, p) => s + p.amount, 0);
       const total = sum(items), paid = sum(pays), rest = total - paid;
       const pay_status = o.stage === 'Отменён' ? 'Отменён' : paid === 0 && total > 0 ? 'Не оплачено' : rest > 0 ? 'Частично' : 'Оплачено';
-      return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount, ink, body }) => ({ product, qty, amount, ink, body })),
+      return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount, ink, body, details, color }) => ({ product, qty, amount, ink, body, details, color })),
         paid_click: sum(pays, 'click'), paid_paymi: sum(pays, 'paymi'), paid_card: sum(pays, 'card'), paid_terminal: sum(pays, 'terminal'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
     };
     const sees = (o) => user.role === 'owner' || (user.role === 'designer'
@@ -101,7 +102,11 @@
         .filter((o) => !p.debt || (o.rest > 0 && o.stage !== 'Отменён'))
         .sort((a, b) => (b.order_date + String(b.id).padStart(9, '0')).localeCompare(a.order_date + String(a.id).padStart(9, '0'))),
       order: (p) => ({ ...view(find(p.id)), payments: db.payments.filter((x) => x.order_id === Number(p.id)),
-        designs: db.designs.filter((x) => x.order_id === Number(p.id)) }),
+        designs: db.designs.filter((x) => x.order_id === Number(p.id)), files: db.files.filter((x) => x.order_id === Number(p.id)) }),
+      // файлы дизайна: в демо сам файл никуда не грузится, запоминаем только имя
+      file_upload_url: (p) => { find(p.order_id); return { path: `${p.order_id}/${p.name}`, url: '' }; },
+      file_add: (p) => { db.files.push({ id: seq.f++, order_id: Number(p.order_id), path: p.path, name: p.name, size: p.size }); return A.order({ id: p.order_id }); },
+      file_delete: (p) => { const f = db.files.find((x) => x.id === Number(p.id)); db.files = db.files.filter((x) => x !== f); return A.order({ id: f.order_id }); },
       // как client_by_phone в базе: прошлые заказы по последним 9 цифрам телефона
       client_lookup: (p) => {
         const p9 = (s) => String(s || '').replace(/\D/g, '').slice(-9);
@@ -129,7 +134,7 @@
         items.forEach((i) => {
           const body = demoDicts.products.some((p) => p.name === i.product && p.body) ? i.body || 'Qora' : null;
           (body || '').split(',').map((b) => b.trim()).filter((b) => b && !demoDicts.body_colors.includes(b)).forEach((b) => demoDicts.body_colors.push(b)); // как сервер: новый цвет запоминаем
-          db.items.push({ order_id: id, product: i.product, qty: Number(i.qty) || 1, amount: Number(i.amount) || 0, ink: i.ink || null, body });
+          db.items.push({ order_id: id, product: i.product, qty: Number(i.qty) || 1, amount: Number(i.amount) || 0, ink: i.ink || null, body, details: i.details || null, color: i.color || null });
         });
         if (p.payment && Number(p.payment.amount) > 0) A.payment_add({ order_id: id, ...p.payment });
         return A.order({ id });

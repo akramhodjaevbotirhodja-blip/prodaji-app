@@ -235,7 +235,7 @@
   if (tg) tg.BackButton.onClick(pop);
 
   async function render() {
-    S.receipt = null; S.designs = []; S.clientHint = null; // выбранные картинки живут только на текущем экране
+    S.receipt = null; S.designs = []; S.files = []; S.clientHint = null; // выбранные картинки и файлы живут только на текущем экране
     const view = S.stack[S.stack.length - 1];
     S.pz = 'receipt'; // Ctrl+V идёт в чек; если поля чека нет (заказ оплачен) — paintPz переключит на дизайн
     $tabs.hidden = !!view && view.type === 'form';
@@ -743,7 +743,7 @@
         ${stepper(o)}
         <div class="list">${info}</div>
         <h2>Продукты</h2>
-        <div class="card">${o.items.map((i) => `<div class="total-line"><span>${esc(i.product)} ×${i.qty}${inkDot(i.ink)}${bodyDot(i.body)}</span><span>${money(i.amount)}</span></div>`).join('')}
+        <div class="card">${o.items.map((i) => `<div class="total-line"><span>${esc(i.product)} ×${i.qty}${inkDot(i.ink)}${bodyDot(i.body)}${itemExtra(i) ? ` <span class="hint">${esc(itemExtra(i))}</span>` : ''}</span><span>${money(i.amount)}</span></div>`).join('')}
           <div class="total-line big"><span>Итого</span><span>${money(o.total)} сум</span></div>
           <div class="total-line"><span class="green">Оплачено</span><span class="green">${money(o.paid)}</span></div>
           <div class="total-line"><span class="${o.rest > 0 ? 'red' : 'green'}"><b>Остаток</b></span><span class="${o.rest > 0 ? 'red' : 'green'}"><b>${money(o.rest)}</b></span></div></div>
@@ -764,6 +764,10 @@
             <a href="${esc(d.url)}" data-act="receipt"><img src="${esc(d.url)}" alt="Дизайн"></a>
             <button data-act="designdel" data-id="${d.id}" aria-label="Удалить">✕</button></div>`).join('')}</div>` : '<div class="hint">Дизайн ещё не прикреплён</div>'}
           ${designPicker(o.id)}</div>
+        <h2>Файл дизайна (.cdr, .pdf)</h2>
+        <div class="card">${filesList(o.files || [], 'filedel')}
+          <label class="btn sm ghost" style="margin-top:8px">📎 Прикрепить файл<input type="file" multiple hidden data-file-for="${o.id}"></label>
+          <div class="hint" style="margin-top:6px">Уходит в группу цеха, когда заказ переходит в «Производство». До 50 МБ.</div></div>
         <button class="btn ghost" data-act="edit">Редактировать заказ</button>
         <button class="btn ghost" data-act="repeat">🔁 Повторить заказ</button>
         <button class="btn ghost" data-act="merge">Объединить с другим заказом</button>
@@ -804,6 +808,10 @@
           <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="firstPayTime"></div></div>
           ${receiptPicker()}</div>`}
         <h2>Утверждённый дизайн</h2><div class="card">${designPicker()}</div>
+        <h2>Файл дизайна (.cdr, .pdf)</h2><div class="card"><div id="newFiles"></div>
+          <label class="btn sm ghost" style="margin-top:6px">📎 Прикрепить файл<input type="file" multiple hidden data-file-new></label>
+          <div class="hint" style="margin-top:6px">Загрузится вместе с заказом. До 50 МБ.</div></div>
+        <datalist id="tabColors"><option value="Тилла"><option value="Кумуш"><option value="Оқ"><option value="Қора"></datalist>
         <h2>Доставка</h2>
         <div class="card"><div class="seg" data-seg="dtype">${Object.entries(DELIVERY).map(([k, t]) =>
           `<button data-act="seg" data-v="${k}" class="${k === (o.delivery_type || 'Самовывоз') ? 'on' : ''}">${t}</button>`).join('')}</div>
@@ -846,8 +854,19 @@
   const itemHtml = (i) => `<div class="item" data-product="${esc(i.product)}"><div class="iname">${esc(i.product)}</div>
     <input type="number" inputmode="decimal" data-f="qty" value="${i.qty ?? 1}" min="0" placeholder="шт."><input type="number" inputmode="decimal" data-f="amount" value="${kIn(i.amount)}" placeholder="тыс. сум">
     <button data-act="delitem" aria-label="Убрать">×</button>
+    ${detailFields(i)}
     ${hasInk(i.product) ? colorSet('ink', splitColors(i.ink), i.qty ?? 1) : ''}
     ${hasBody(i.product) ? colorSet('body', splitColors(i.body), i.qty ?? 1) : ''}</div>`;
+  // размер / материал продукта — уходит цеху в подписи к файлу. Табличка: обычно 30×20 и золотая (тилла)
+  const isTablet = (p) => /^(tab|табличк)/i.test(p);
+  const DETAIL_HINT = [[/^(nak|наклейк)/i, 'A4 прозрачный'], [/^(viz|визитк)/i, '350гр'], [/^(ser|сертиф)/i, 'A4 глянец']];
+  const detailHint = (p) => (DETAIL_HINT.find(([re]) => re.test(p)) || [])[1];
+  const detailFields = (i) => isTablet(i.product)
+    ? `<div class="ipair"><input data-f="details" value="${esc(i.details ?? '30x20')}" placeholder="Размер, см" autocomplete="off">
+        <input data-f="color" list="tabColors" value="${esc(i.color ?? 'Тилла')}" placeholder="Цвет" autocomplete="off"></div>`
+    : `<input class="idet" data-f="details" value="${esc(i.details)}" autocomplete="off"
+        placeholder="Размер / материал${detailHint(i.product) ? ', напр. ' + detailHint(i.product) : ''}">`;
+  const itemExtra = (i) => [i.details, i.color && !/^тилла/i.test(i.color) ? i.color : ''].filter(Boolean).join(' · ');
   // один выбор цвета на все штуки или («Har xil rang») — свой цвет у каждой штуки
   const unitCount = (qty) => Math.max(1, Math.min(MAX_UNITS, Math.round(Number(qty) || 1)));
   function colorSet(kind, list, qty, multi = new Set(list).size > 1) {
@@ -1035,7 +1054,8 @@
       const items = itemRows().map((r) => ({
         product: r.dataset.product, qty: r.querySelector('[data-f=qty]').value, amount: kOut(r.querySelector('[data-f=amount]').value),
         ink: setValue(r.querySelector('.colorset[data-kind=ink]')),
-        body: setValue(r.querySelector('.colorset[data-kind=body]')) }));
+        body: setValue(r.querySelector('.colorset[data-kind=body]')),
+        details: r.querySelector('[data-f=details]')?.value.trim() || null, color: r.querySelector('[data-f=color]')?.value.trim() || null }));
       if (!items.length) return toast('Отметьте хотя бы один продукт');
       const noInk = items.find((i) => hasInk(i.product) && !i.ink);
       if (noInk) return toast(`${noInk.product}: siyoh rangini tanlang`);
@@ -1071,11 +1091,12 @@
           if (ch === 'new') twin = null;
         }
       }
-      const designs = S.designs.slice();
+      const designs = S.designs.slice(), files = S.files.slice();
       try {
-        const saved = await call('order_save', { order, items, payment });
-        // заказ уже сохранён: если какой-то дизайн не загрузится, его можно добавить в карточке
+        const saved = await call('order_save', { order, items, payment, files_pending: files.length });
+        // заказ уже сохранён: если какой-то дизайн или файл не загрузится, его можно добавить в карточке
         let failed = 0;
+        for (const f of files) if (!(await uploadFile(saved.id, f, true))) failed++;
         for (const image of designs) {
           if (!(await call('design_add', { order_id: saved.id, image }, { quiet: true }).then(() => true, () => false))) failed++;
         }
@@ -1083,7 +1104,7 @@
         const into = twin && await call('order_merge', { id: twin.id, from: saved.id }, { quiet: true }).then(() => twin.id, () => null);
         const id = into || saved.id;
         haptic('success');
-        toast(failed ? `Заказ сохранён, но ${failed} из ${designs.length} дизайнов не загрузились — добавьте их в карточке`
+        toast(failed ? `Заказ сохранён, но ${failed} из ${designs.length + files.length} дизайнов / файлов не загрузились — добавьте их в карточке`
           : into ? `Добавлено в заказ №${into}` : twin ? `Заказ сохранён отдельно (№${saved.id}) — объединить не удалось` : 'Заказ сохранён');
         S.stack = S.stack.filter((x) => x.type !== 'form' && !(x.type === 'order' && x.id === id));
         push({ type: 'order', id });
@@ -1224,6 +1245,11 @@
     pclear: (el) => { if (el.dataset.v === 'design') S.paste.designs = []; else S.paste[el.dataset.v] = null; paintPaste(); },
     pdesignrm: (el) => { S.paste.designs.splice(Number(el.dataset.i), 1); paintPaste(); },
     designrm: (el) => { S.designs.splice(Number(el.dataset.i), 1); paintDesigns(); },
+    filerm: (el) => { S.files.splice(Number(el.dataset.id), 1); paintFiles(); },
+    async filedel(el) {
+      if (!(await ask('Удалить этот файл дизайна?'))) return;
+      await call('file_delete', { id: Number(el.dataset.id) }); toast('Файл удалён'); render();
+    },
     // данные повторного клиента — только в пустые поля, введённое оператором не трогаем
     clientfill: (el) => {
       const c = S.clientHint;
@@ -1377,6 +1403,12 @@
       e.target.value = '';
     }
     if (file && (e.target.dataset.designFor || e.target.dataset.designNew !== undefined)) { await putDesigns(files); e.target.value = ''; }
+    if (file && e.target.dataset.fileNew !== undefined) { S.files.push(...files); paintFiles(); e.target.value = ''; }
+    if (file && e.target.dataset.fileFor) {
+      let ok = 0;
+      for (const f of files) { toast(`Загружаю ${f.name}…`); if (await uploadFile(Number(e.target.dataset.fileFor), f)) ok++; }
+      if (ok) { haptic('success'); toast(ok > 1 ? `Загружено файлов: ${ok}` : 'Файл загружен'); render(); }
+    }
     if (file && e.target.dataset.receiptFor) {
       let receipt;
       try { receipt = await readReceipt(file); } catch (err) { return toast(err.message); }
@@ -1439,6 +1471,26 @@
       } catch { failed++; }
     }
     if (failed) toast(`Не удалось скопировать дизайнов: ${failed} — добавьте их вручную`);
+  }
+  // файлы дизайна (.cdr, .pdf): сервер даёт подписанную ссылку, файл уходит в хранилище напрямую
+  const FILE_MAX = 50 * 1024 * 1024;
+  const fileSize = (n) => (n > 1048576 ? (n / 1048576).toFixed(1).replace('.', ',') + ' МБ' : Math.max(1, Math.round(n / 1024)) + ' КБ');
+  const filesList = (list, act) => list.length ? `<div class="list">${list.map((f, k) => `<div class="row">
+      <div class="grow">${f.url ? `<a href="${esc(f.url)}" data-act="link">📄 ${esc(f.name)}</a>` : `📄 ${esc(f.name)}`}<div class="sub">${f.size ? fileSize(f.size) : ''}</div></div>
+      <button class="btn sm danger" data-act="${act}" data-id="${f.id ?? k}">✕</button></div>`).join('')}</div>` : '<div class="hint">Файл ещё не прикреплён</div>';
+  const paintFiles = () => { const box = document.getElementById('newFiles'); if (box) box.innerHTML = filesList(S.files, 'filerm'); };
+  async function uploadFile(orderId, f, quiet = false) {
+    if (f.size > FILE_MAX) { toast(`${f.name}: больше 50 МБ`); return false; }
+    try {
+      const up = await call('file_upload_url', { order_id: orderId, name: f.name, size: f.size }, { quiet });
+      if (!window.IS_DEMO) {
+        const body = new FormData(); body.append('cacheControl', '3600'); body.append('', f);
+        const res = await fetch(up.url, { method: 'PUT', body });
+        if (!res.ok) throw new Error('Файл не загрузился (' + res.status + ')');
+      }
+      await call('file_add', { order_id: orderId, path: up.path, name: f.name, size: f.size }, { quiet });
+      return true;
+    } catch (err) { if (!quiet) toast(err.message); return false; }
   }
   // дизайны: в карточке заказа сохраняются сразу, в форме — вместе с заказом; можно несколько за раз
   async function putDesigns(files) {
