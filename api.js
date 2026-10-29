@@ -62,6 +62,7 @@
     const user = role === 'owner'
       ? { telegram_id: 1, name: 'Руководитель (демо)', role: 'owner', code: null }
       : role === 'spender' ? { telegram_id: 3, name: 'Расходы (демо)', role: 'spender', code: 'KS' }
+      : role === 'designer' ? { telegram_id: 4, name: 'Дизайнер (демо)', role: 'designer', code: 'IK' }
       : { telegram_id: 2, name: role + ' (демо)', role: 'manager', code: role };
 
     const view = (o) => {
@@ -73,10 +74,12 @@
       return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount, ink, body }) => ({ product, qty, amount, ink, body })),
         paid_click: sum(pays, 'click'), paid_paymi: sum(pays, 'paymi'), paid_card: sum(pays, 'card'), paid_terminal: sum(pays, 'terminal'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
     };
+    const sees = (o) => user.role === 'owner' || (user.role === 'designer'
+      ? [o.designer_code, o.designer2_code].includes(user.code) || o.created_by === user.telegram_id : o.manager_code === user.code);
     const find = (id) => {
       const o = db.orders.find((x) => x.id === Number(id));
       if (!o) throw new Error('Заказ не найден');
-      if (user.role !== 'owner' && o.manager_code !== user.code) throw new Error('Это заказ другого менеджера');
+      if (!sees(o)) throw new Error('Это заказ другого менеджера');
       return o;
     };
     const A = {
@@ -92,7 +95,7 @@
         return A.me();
       },
       orders: (p) => db.orders.map(view)
-        .filter((o) => user.role === 'owner' || o.manager_code === user.code)
+        .filter(sees)
         .filter((o) => (!p.from || o.order_date >= p.from) && (!p.to || o.order_date <= p.to))
         .filter((o) => !p.debt || (o.rest > 0 && o.stage !== 'Отменён'))
         .sort((a, b) => (b.order_date + String(b.id).padStart(9, '0')).localeCompare(a.order_date + String(a.id).padStart(9, '0'))),
@@ -118,10 +121,10 @@
       order_save: (p) => {
         const items = (p.items || []).filter((i) => i.product);
         if (!items.length) throw new Error('Добавьте хотя бы один продукт');
-        const row = { ...p.order, manager_code: user.role === 'owner' ? p.order.manager_code : user.code };
+        const row = { ...p.order, manager_code: ['owner', 'designer'].includes(user.role) ? p.order.manager_code : user.code };
         let id = Number(p.order.id);
         if (id) { Object.assign(find(id), row); db.items = db.items.filter((i) => i.order_id !== id); }
-        else { id = ++seq.o; db.orders.push({ ...row, id, stage: row.stage || STAGES[0] }); }
+        else { id = ++seq.o; db.orders.push({ ...row, id, stage: row.stage || STAGES[0], created_by: user.telegram_id }); }
         items.forEach((i) => {
           const body = demoDicts.products.some((p) => p.name === i.product && p.body) ? i.body || 'Qora' : null;
           (body || '').split(',').map((b) => b.trim()).filter((b) => b && !demoDicts.body_colors.includes(b)).forEach((b) => demoDicts.body_colors.push(b)); // как сервер: новый цвет запоминаем

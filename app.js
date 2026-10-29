@@ -38,6 +38,8 @@
   const isOwner = () => S.user && S.user.role === 'owner';
   // роль «Расходы»: только вкладка расходов и «Ещё», видит только свои записи
   const isSpender = () => S.user && S.user.role === 'spender';
+  // роль «Дизайнер»: видит заказы, где он дизайнер (и которые сам открыл), менеджера в заказе выбирает сам
+  const isDesigner = () => S.user && S.user.role === 'designer';
   // «➕ Новый вид расхода»: свой вид вписывают в поле под списком, сервер добавит его в справочник
   const NEW_CAT = '__new';
   function expenseCategory() {
@@ -48,8 +50,9 @@
     const same = S.dicts.expense_categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
     return same ? same.name : name.slice(0, 60);
   }
-  const ROLE_NAMES = { manager: 'Менеджер (видит свои заказы)', spender: 'Расходы (вносит только расходы)', owner: 'Руководитель (видит всё)' };
-  const roleBadge = (r) => ({ owner: 'руковод.', spender: 'расходы' }[r] || 'менеджер');
+  const ROLE_NAMES = { manager: 'Менеджер (видит свои заказы)', designer: 'Дизайнер (видит заказы со своим дизайном)',
+    spender: 'Расходы (вносит только расходы)', owner: 'Руководитель (видит всё)' };
+  const roleBadge = (r) => ({ owner: 'руковод.', designer: 'дизайнер', spender: 'расходы' }[r] || 'менеджер');
   // window.confirm в Telegram Desktop не показывается и сразу возвращает false, поэтому спрашиваем через Telegram
   const ask = (msg) => new Promise((res) => (tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')
     ? tg.showConfirm(msg, res) : res(window.confirm(msg))));
@@ -358,7 +361,7 @@
 
     async more() {
       const u = S.user;
-      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : isSpender() ? 'Расходы · ' + esc(u.code) : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
+      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : isSpender() ? 'Расходы · ' + esc(u.code) : isDesigner() ? 'Дизайнер ' + esc(u.code) : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
         <div class="hint">Версия приложения ${esc(VERSION)}</div></div>`;
       if (!isOwner()) return html;
       const free = S.dicts.staff.filter((s) => s.active && !s.telegram_id).map((s) => s.code);
@@ -743,14 +746,15 @@
     async form(v) {
       const o = v.data;
       const names = (k, f = 'name') => S.dicts[k].filter((x) => x.active !== false).map((x) => x[f]);
-      const staff = S.dicts.staff.filter((s) => s.active && s.role !== 'spender').map((s) => s.code);
+      const staff = S.dicts.staff.filter((s) => s.active && !['spender', 'designer'].includes(s.role)).map((s) => s.code);
+      const pickManager = isOwner() || isDesigner();
       v.after = () => { recalcForm(); if (o.design_urls?.length) copyDesigns(o.design_urls); };
       return `<h1>${o.id ? 'Заказ №' + o.id : o.repeat_of ? 'Повтор заказа №' + o.repeat_of : 'Новый заказ'}</h1>
         ${o.repeat_of ? '<p class="hint" style="margin:0 6px 10px">Проверьте суммы и дизайн — всё взято из старого заказа. Лишний дизайн уберите ✕.</p>' : ''}
         <div class="card">
           <div class="grid2"><div><label>Дата</label><input type="date" name="order_date" value="${o.order_date || today()}"></div>
-          <div><label>Менеджер</label>${isOwner() ? `<select name="manager_code">${opts(staff, o.manager_code || S.user.code)}</select>` : `<input value="${esc(S.user.code)}" disabled>`}</div></div>
-          <div class="grid2"><div><label>Дизайнер</label><select name="designer_code">${opts(names('designers', 'code'), o.designer_code)}</select></div>
+          <div><label>Менеджер</label>${pickManager ? `<select name="manager_code">${opts(staff, o.manager_code || (isOwner() ? S.user.code : ''))}</select>` : `<input value="${esc(S.user.code)}" disabled>`}</div></div>
+          <div class="grid2"><div><label>Дизайнер</label><select name="designer_code">${opts(names('designers', 'code'), o.designer_code || (!o.id && isDesigner() ? S.user.code : ''))}</select></div>
           <div><label>Источник</label><select name="source" data-input="source">${opts(names('sources'), o.source)}</select></div></div>
           ${o.designer2_code ? `<label>2-й дизайнер (из объединённого заказа)</label>
             <select name="designer2_code">${opts(names('designers', 'code'), o.designer2_code, 'нет')}</select>` : ''}
@@ -1007,7 +1011,7 @@
       if (noInk) return toast(`${noInk.product}: siyoh rangini tanlang`);
       if (items.some((i) => !(Number(i.amount) > 0)) && !(await ask('У некоторых продуктов не указана сумма. Сохранить так?'))) return;
       if (!order.client && !order.company && !order.phone) return toast('Укажите клиента, компанию или телефон');
-      if (isOwner() && !order.manager_code) return toast('Выберите менеджера');
+      if ((isOwner() || isDesigner()) && !order.manager_code) return toast('Выберите менеджера');
       const fp = document.getElementById('firstPay');
       const payment = fp && Number(fp.value) > 0 ? { method: segVal('method'), amount: kOut(fp.value),
         paid_at: document.getElementById('firstPayDate').value, paid_time: document.getElementById('firstPayTime').value, receipt: S.receipt } : null;
@@ -1484,7 +1488,7 @@
     if (!window.IS_DEMO) return '';
     const cur = new URLSearchParams(location.search).get('demo') || 'owner';
     return `<div class="demo-bar">Демо-режим, данные не сохраняются. Смотреть как:
-      <select data-demo>${['owner', 'spender', 'MY', 'SH', 'D', 'V'].map((r) => `<option ${r === cur ? 'selected' : ''} value="${r}">${r === 'owner' ? 'руководитель' : r === 'spender' ? 'расходы' : 'менеджер ' + r}</option>`).join('')}</select></div>`;
+      <select data-demo>${['owner', 'spender', 'designer', 'MY', 'SH', 'D', 'V'].map((r) => `<option ${r === cur ? 'selected' : ''} value="${r}">${r === 'owner' ? 'руководитель' : r === 'spender' ? 'расходы' : r === 'designer' ? 'дизайнер' : 'менеджер ' + r}</option>`).join('')}</select></div>`;
   }
 
   // ---------- старт ----------
