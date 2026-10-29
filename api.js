@@ -75,7 +75,8 @@
         paid_click: sum(pays, 'click'), paid_paymi: sum(pays, 'paymi'), paid_card: sum(pays, 'card'), paid_terminal: sum(pays, 'terminal'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
     };
     const sees = (o) => user.role === 'owner' || (user.role === 'designer'
-      ? [o.designer_code, o.designer2_code].some((c) => c && c.toUpperCase() === user.code.toUpperCase()) || o.created_by === user.telegram_id : o.manager_code === user.code);
+      ? [o.designer_code, o.designer2_code].some((c) => c && c.toUpperCase() === user.code.toUpperCase()) || o.created_by === user.telegram_id
+        || (o.created_by == null && o.stage === 'Дизайн готов') : o.manager_code === user.code);
     const find = (id) => {
       const o = db.orders.find((x) => x.id === Number(id));
       if (!o) throw new Error('Заказ не найден');
