@@ -861,7 +861,8 @@
     ${hasBody(i.product) ? colorSet('body', splitColors(i.body), i.qty ?? 1) : ''}</div>`;
   // размер / материал продукта — уходит цеху в подписи к файлу. Табличка: обычно 30×20 и золотая (тилла)
   const isTablet = (p) => /^(tab|табличк)/i.test(p);
-  const DETAIL_HINT = [[/^(nak|наклейк)/i, 'A4 прозрачный'], [/^(viz|визитк)/i, '350гр'], [/^(ser|сертиф)/i, 'A4 глянец']];
+  // Log — нестандартный штамп: цеху нужен размер
+  const DETAIL_HINT = [[/^(log|логотип)/i, '6x4 (размер штампа)'], [/^(nak|наклейк)/i, 'A4 прозрачный'], [/^(viz|визитк)/i, '350гр'], [/^(ser|сертиф)/i, 'A4 глянец']];
   const detailHint = (p) => (DETAIL_HINT.find(([re]) => re.test(p)) || [])[1];
   const detailFields = (i) => isTablet(i.product)
     ? `<div class="ipair"><input data-f="details" value="${esc(i.details ?? '30x20')}" placeholder="Размер, см" autocomplete="off">
