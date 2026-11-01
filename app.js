@@ -43,6 +43,9 @@
   const isSpender = () => S.user && S.user.role === 'spender';
   // роль «Дизайнер»: видит заказы, где он дизайнер (и которые сам открыл), менеджера в заказе выбирает сам
   const isDesigner = () => S.user && S.user.role === 'designer';
+  // РОП (руководитель отдела продаж): все заказы и результаты менеджеров, но без финансов, сотрудников и удаления
+  const isRop = () => S.user && S.user.role === 'rop';
+  const seesAll = () => isOwner() || isRop();
   // код сотрудника заглавный (ZU), в справочнике дизайнеров — Zu
   const myDesignerCode = () => (S.dicts.designers.find((d) => d.code.toUpperCase() === String(S.user.code).toUpperCase()) || {}).code || '';
   // «➕ Новый вид расхода»: свой вид вписывают в поле под списком, сервер добавит его в справочник
@@ -67,8 +70,9 @@
     return same ? same.name : name.slice(0, 60);
   }
   const ROLE_NAMES = { manager: 'Менеджер (видит свои заказы)', designer: 'Дизайнер (видит заказы со своим дизайном)',
+    rop: 'РОП (все заказы, без финансов)',
     spender: 'Расходы (вносит только расходы)', owner: 'Руководитель (видит всё)' };
-  const roleBadge = (r) => ({ owner: 'руковод.', designer: 'дизайнер', spender: 'расходы' }[r] || 'менеджер');
+  const roleBadge = (r) => ({ owner: 'руковод.', designer: 'дизайнер', spender: 'расходы', rop: 'РОП' }[r] || 'менеджер');
   // window.confirm в Telegram Desktop не показывается и сразу возвращает false, поэтому спрашиваем через Telegram
   const ask = (msg) => new Promise((res) => (tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')
     ? tg.showConfirm(msg, res) : res(window.confirm(msg))));
@@ -381,7 +385,7 @@
 
     async more() {
       const u = S.user;
-      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : isSpender() ? 'Расходы · ' + esc(u.code) : isDesigner() ? 'Дизайнер ' + esc(u.code) : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
+      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : isRop() ? 'РОП' : isSpender() ? 'Расходы · ' + esc(u.code) : isDesigner() ? 'Дизайнер ' + esc(u.code) : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
         <div class="hint">Версия приложения ${esc(VERSION)}</div></div>`;
       if (!isOwner()) return html;
       const free = S.dicts.staff.filter((s) => s.active && !s.telegram_id).map((s) => s.code);
@@ -533,7 +537,7 @@
       <div class="dash-cols">
       ${sec(stockHtml(stock))}
       ${sec(financeHtml(fin))}
-      ${isOwner() ? `<section><h2>Менеджеры</h2><div class="list">${mgr.map((g) => `<div class="row" style="display:block">
+      ${seesAll() ? `<section><h2>Менеджеры</h2><div class="list">${mgr.map((g) => `<div class="row" style="display:block">
           <div style="display:flex;justify-content:space-between"><b>${esc(g.k)}</b><span class="amt"><b>${money(g.sum)}</b> · ${g.n} зак.</span></div>
           <div class="bar"><i class="paid" style="width:${g.sum ? (g.paid / g.sum) * 100 : 0}%"></i><i class="rest" style="width:${g.sum ? (g.rest / g.sum) * 100 : 0}%"></i></div>
           <div class="hint" style="margin-top:3px">собрано ${g.sum ? Math.round((g.paid / g.sum) * 100) : 0}% · <span class="red">не получено ${money(g.rest)}</span></div></div>`).join('') || '<div class="center hint">Нет данных</div>'}</div></section>` : ''}
@@ -779,8 +783,8 @@
     async form(v) {
       const o = v.data;
       const names = (k, f = 'name') => S.dicts[k].filter((x) => x.active !== false).map((x) => x[f]);
-      const staff = S.dicts.staff.filter((s) => s.active && !['spender', 'designer'].includes(s.role)).map((s) => s.code);
-      const pickManager = isOwner() || isDesigner();
+      const staff = S.dicts.staff.filter((s) => s.active && !['spender', 'designer', 'rop'].includes(s.role)).map((s) => s.code);
+      const pickManager = isOwner() || isDesigner() || isRop();
       v.after = () => { recalcForm(); if (o.design_urls?.length) copyDesigns(o.design_urls); };
       return `<h1>${o.id ? 'Заказ №' + o.id : o.repeat_of ? 'Повтор заказа №' + o.repeat_of : 'Новый заказ'}</h1>
         ${o.repeat_of ? '<p class="hint" style="margin:0 6px 10px">Проверьте суммы и дизайн — всё взято из старого заказа. Лишний дизайн уберите ✕.</p>' : ''}
@@ -1064,7 +1068,7 @@
       if (noInk) return toast(`${noInk.product}: siyoh rangini tanlang`);
       if (items.some((i) => !(Number(i.amount) > 0)) && !(await ask('У некоторых продуктов не указана сумма. Сохранить так?'))) return;
       if (!order.client && !order.company && !order.phone) return toast('Укажите клиента, компанию или телефон');
-      if ((isOwner() || isDesigner()) && !order.manager_code) return toast('Выберите менеджера');
+      if ((isOwner() || isDesigner() || isRop()) && !order.manager_code) return toast('Выберите менеджера');
       const fp = document.getElementById('firstPay');
       const payment = fp && Number(fp.value) > 0 ? { method: segVal('method'), amount: kOut(fp.value),
         paid_at: document.getElementById('firstPayDate').value, paid_time: document.getElementById('firstPayTime').value, receipt: S.receipt } : null;
@@ -1602,7 +1606,7 @@
     if (!window.IS_DEMO) return '';
     const cur = new URLSearchParams(location.search).get('demo') || 'owner';
     return `<div class="demo-bar">Демо-режим, данные не сохраняются. Смотреть как:
-      <select data-demo>${['owner', 'spender', 'designer', 'MY', 'SH', 'D', 'V'].map((r) => `<option ${r === cur ? 'selected' : ''} value="${r}">${r === 'owner' ? 'руководитель' : r === 'spender' ? 'расходы' : r === 'designer' ? 'дизайнер' : 'менеджер ' + r}</option>`).join('')}</select></div>`;
+      <select data-demo>${['owner', 'rop', 'spender', 'designer', 'MY', 'SH', 'D', 'V'].map((r) => `<option ${r === cur ? 'selected' : ''} value="${r}">${r === 'owner' ? 'руководитель' : r === 'rop' ? 'РОП' : r === 'spender' ? 'расходы' : r === 'designer' ? 'дизайнер' : 'менеджер ' + r}</option>`).join('')}</select></div>`;
   }
 
   // ---------- старт ----------
@@ -1622,7 +1626,7 @@
       cached('orders', range(S.filters.period)).catch(() => {}); // у роли «Расходы» просто вернёт отказ
       const me = await window.api('me');
       S.user = me.user; setMe(me); $tabs.hidden = false;
-      $tabs.querySelector('[data-tab=clients]').hidden = !isOwner(); // клиентская база — только руководителю
+      $tabs.querySelector('[data-tab=clients]').hidden = !seesAll(); // клиентская база — руководителю и РОП
       if (isSpender()) {
         [...$tabs.children].forEach((b) => { b.hidden = !['spend', 'more'].includes(b.dataset.tab); });
         S.tab = 'spend';
