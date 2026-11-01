@@ -106,7 +106,8 @@
         designs: db.designs.filter((x) => x.order_id === Number(p.id)), files: db.files.filter((x) => x.order_id === Number(p.id)) }),
       // файлы дизайна: в демо сам файл никуда не грузится, запоминаем только имя
       file_upload_url: (p) => { find(p.order_id); return { path: `${p.order_id}/${p.name}`, url: '' }; },
-      file_add: (p) => { db.files.push({ id: seq.f++, order_id: Number(p.order_id), path: p.path, name: p.name, size: p.size }); return A.order({ id: p.order_id }); },
+      file_add: (p) => { db.files.push({ id: seq.f++, order_id: Number(p.order_id), path: p.path, name: p.name, size: p.size, product: p.product || null }); return A.order({ id: p.order_id }); },
+      file_product: (p) => { db.files.find((x) => x.id === Number(p.id)).product = p.product || null; return { ok: true }; },
       file_delete: (p) => { const f = db.files.find((x) => x.id === Number(p.id)); db.files = db.files.filter((x) => x !== f); return A.order({ id: f.order_id }); },
       // как client_by_phone в базе: прошлые заказы по последним 9 цифрам телефона
       client_lookup: (p) => {

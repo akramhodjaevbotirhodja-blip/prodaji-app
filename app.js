@@ -771,7 +771,7 @@
             <button data-act="designdel" data-id="${d.id}" aria-label="Удалить">✕</button></div>`).join('')}</div>` : '<div class="hint">Дизайн ещё не прикреплён</div>'}
           ${designPicker(o.id)}</div>
         <h2>Файл дизайна (.cdr, .pdf)</h2>
-        <div class="card">${filesList(o.files || [], 'filedel')}
+        <div class="card">${filesList(o.files || [], 'filedel', (o.items || []).map((i) => i.product))}
           <label class="btn sm ghost" style="margin-top:8px">📎 Прикрепить файл<input type="file" multiple hidden data-file-for="${o.id}"></label>
           <div class="hint" style="margin-top:6px">Уходит в группу цеха, когда заказ переходит в «Производство». До 50 МБ.</div></div>
         <button class="btn ghost" data-act="edit">Редактировать заказ</button>
@@ -919,6 +919,7 @@
   function refreshPick() {
     const pick = document.getElementById('pick');
     if (pick) pick.innerHTML = pickHtml(itemRows().map((r) => ({ product: r.dataset.product })));
+    paintFiles();
     recalcForm();
   }
   function recalcForm() {
@@ -1398,6 +1399,12 @@
       box.hidden = e.target.value !== NEW_CAT;
       if (!box.hidden) box.focus();
     }
+    if (e.target.dataset.fileProd !== undefined) {
+      const product = e.target.value || null;
+      if (e.target.dataset.mode === 'filerm') S.files[Number(e.target.dataset.fileProd)].product = product;
+      else { await call('file_product', { id: Number(e.target.dataset.fileProd), product }); toast(product ? `Файл уйдёт в группу ${product}` : 'Файл уйдёт во все группы'); }
+      return;
+    }
     const file = e.target.files && e.target.files[0];
     if (file && e.target.dataset.receiptNew !== undefined) {
       try {
@@ -1482,10 +1489,20 @@
   // файлы дизайна (.cdr, .pdf): сервер даёт подписанную ссылку, файл уходит в хранилище напрямую
   const FILE_MAX = 50 * 1024 * 1024;
   const fileSize = (n) => (n > 1048576 ? (n / 1048576).toFixed(1).replace('.', ',') + ' МБ' : Math.max(1, Math.round(n / 1024)) + ' КБ');
-  const filesList = (list, act) => list.length ? `<div class="list">${list.map((f, k) => `<div class="row">
-      <div class="grow">${f.url ? `<a href="${esc(f.url)}" data-act="link">📄 ${esc(f.name)}</a>` : `📄 ${esc(f.name)}`}<div class="sub">${f.size ? fileSize(f.size) : ''}</div></div>
+  // у заказа несколько товаров — файл привязывается к своему: в группу цеха уходит только его файл
+  // (не выбран — уходит во все группы заказа)
+  const fileProduct = (f, products, mode) => products.length > 1 ? `<select class="fileprod" data-file-prod="${f.id ?? f.k}" data-mode="${mode}">
+      <option value="">Во все группы</option>${products.map((p) => `<option${f.product === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select>` : '';
+  const filesList = (list, act, products = []) => list.length ? `<div class="list">${list.map((f, k) => `<div class="row">
+      <div class="grow">${f.url ? `<a href="${esc(f.url)}" data-act="link">📄 ${esc(f.name)}</a>` : `📄 ${esc(f.name)}`}<div class="sub">${f.size ? fileSize(f.size) : ''}</div>
+      ${fileProduct({ id: f.id, k, product: f.product }, [...new Set(products)], act)}</div>
       <button class="btn sm danger" data-act="${act}" data-id="${f.id ?? k}">✕</button></div>`).join('')}</div>` : '<div class="hint">Файл ещё не прикреплён</div>';
-  const paintFiles = () => { const box = document.getElementById('newFiles'); if (box) box.innerHTML = filesList(S.files, 'filerm'); };
+  const paintFiles = () => {
+    const box = document.getElementById('newFiles');
+    const products = itemRows().map((r) => r.dataset.product);
+    S.files.forEach((f) => { if (f.product && !products.includes(f.product)) f.product = null; }); // товар убрали из заказа
+    if (box) box.innerHTML = filesList(S.files, 'filerm', products);
+  };
   async function uploadFile(orderId, f, quiet = false) {
     if (f.size > FILE_MAX) { toast(`${f.name}: больше 50 МБ`); return false; }
     try {
@@ -1495,7 +1512,7 @@
         const res = await fetch(up.url, { method: 'PUT', body });
         if (!res.ok) throw new Error('Файл не загрузился (' + res.status + ')');
       }
-      await call('file_add', { order_id: orderId, path: up.path, name: f.name, size: f.size }, { quiet });
+      await call('file_add', { order_id: orderId, path: up.path, name: f.name, size: f.size, product: f.product || null }, { quiet });
       return true;
     } catch (err) { if (!quiet) toast(err.message); return false; }
   }
