@@ -6,8 +6,8 @@
   const VERSION = (String(document.currentScript && document.currentScript.src).match(/v=(\w+)/) || [])[1] || '—';
   const $app = document.getElementById('app');
   const $tabs = document.getElementById('tabs');
-  // QK — оплата по QR-коду, их две: Click и Paymi
-  const METHODS = { click: 'QK Click', paymi: 'QK Paymi', card: 'Карта', terminal: 'Терминал', cash: 'Наличные', transfer: 'Перечисление' };
+  // QK — оплата по QR-коду, их три: Click, Payme (method = 'paymi') и QK банка (на расчётный счёт фирмы, method = 'qk')
+  const METHODS = { card: 'Карта', click: 'QK Click', paymi: 'QK Payme', qk: 'QK', terminal: 'Терминал', cash: 'Наличные', transfer: 'Перечисление' };
   const DELIVERY = { 'Самовывоз': 'Самовывоз', 'Ташкент': 'По Ташкенту', 'Область': 'По области' };
   const REGIONS = ['Андижанская', 'Бухарская', 'Джизакская', 'Кашкадарьинская', 'Навоийская', 'Наманганская', 'Самаркандская',
     'Сурхандарьинская', 'Сырдарьинская', 'Ташкентская обл.', 'Ферганская', 'Хорезмская', 'Каракалпакстан'];
@@ -313,7 +313,7 @@
               ...bare.map((p) => [p.id, `Без чека: ${fmtDate(p.paid_at)} · ${money(p.amount)} · ${METHODS[p.method]}`])]
               .map(([k, t]) => `<button class="chip ${String(k) === String(to) ? 'on' : ''}" data-act="payto" data-v="${k}">${esc(t)}</button>`).join('')}</div>` : ''}
             <div id="newPay" ${to === 'new' ? '' : 'hidden'}>
-              ${segHtml('method', 'click')}
+              ${segHtml('method', 'card')}
               <label>${K_LABEL}</label><input type="number" inputmode="decimal" placeholder="50 = 50 000" value="${o.rest > 0 ? kIn(o.rest) : ''}" id="payAmount">
               <div class="grid2"><div><label>Дата оплаты</label>${payDateField('payDate')}</div>
               <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="payTime"></div></div></div></div>`;
@@ -759,7 +759,7 @@
             : `<label class="btn sm ghost receipt-add">📎 Чек<input type="file" accept="image/*" hidden data-receipt-for="${p.id}"></label>`}
           <div class="amt">${money(p.amount)}</div>${isOwner() ? `<button class="btn sm danger" data-act="paydel" data-id="${p.id}">✕</button>` : ''}</div>`).join('') || '<div class="row hint">Оплат пока нет</div>'}</div>
         ${o.rest > 0 && o.stage !== 'Отменён' ? `<div class="card" style="margin-top:8px"><b>Добавить оплату</b>
-          ${segHtml('method', 'click')}
+          ${segHtml('method', 'card')}
           <label>${K_LABEL}</label><input type="number" inputmode="decimal" placeholder="50 = 50 000" value="${kIn(o.rest)}" id="payAmount">
           <div class="grid2"><div><label>Дата оплаты</label>${payDateField('payDate')}</div>
           <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="payTime"></div></div>
@@ -808,7 +808,7 @@
           <div class="chips wrap" id="pick">${pickHtml(o.items || [])}</div>
           <div id="items">${(o.items || []).map(itemHtml).join('')}</div>
           <div class="total-line big" style="margin-top:8px"><span>Итого</span><span id="formTotal">0</span></div></div>
-        ${o.payments?.length ? '' : `<h2>Предоплата</h2><div class="card">${segHtml('method', 'click')}
+        ${o.payments?.length ? '' : `<h2>Предоплата</h2><div class="card">${segHtml('method', 'card')}
           <label>${K_LABEL}</label><input type="number" inputmode="decimal" placeholder="Можно пусто" id="firstPay">
           <div class="grid2"><div><label>Дата оплаты</label>${payDateField('firstPayDate')}</div>
           <div><label>Время оплаты</label><input type="time" value="${nowTime()}" id="firstPayTime"></div></div>
@@ -843,9 +843,9 @@
     },
   };
 
-  // способ оплаты: «QK» — одна кнопка, под ней выбор Click / Paymi
-  const QK = { click: 'Click', paymi: 'Paymi' };
-  const PAY_BUTTONS = { qk: 'QK', card: 'Карта', terminal: 'Терминал', cash: 'Наличные', transfer: 'Перечисление' };
+  // способ оплаты: чаще всего карта — она первая; «QK» — одна кнопка, под ней выбор Click / Payme / QK (счёт фирмы)
+  const QK = { click: 'Click', paymi: 'Payme', qk: 'QK' };
+  const PAY_BUTTONS = { card: 'Карта', qk: 'QK', terminal: 'Терминал', cash: 'Наличные', transfer: 'Перечисление' };
   const segHtml = (name, cur) => {
     const qk = cur in QK;
     const btn = (k, t, on) => `<button data-act="seg" data-v="${k}" class="${on ? 'on' : ''}">${t}</button>`;
@@ -928,7 +928,7 @@
   }
   const segVal = (name) => {
     const b = document.querySelector(`[data-seg=${name}] .on`);
-    return b && (b.dataset.v === 'qk' ? segVal(name + '-qk') : b.dataset.v); // QK → выбранный Click или Paymi
+    return b && (b.dataset.v === 'qk' && !name.endsWith('-qk') ? segVal(name + '-qk') : b.dataset.v); // QK → выбранный Click, Payme или QK
   };
 
   // ---------- действия ----------
@@ -1035,7 +1035,7 @@
     },
     seg: (el) => {
       el.parentNode.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el));
-      const qk = $app.querySelector(`[data-seg="${el.parentNode.dataset.seg}-qk"]`); // нажали QK — показать Click / Paymi
+      const qk = $app.querySelector(`[data-seg="${el.parentNode.dataset.seg}-qk"]`); // нажали QK — показать Click / Payme / QK
       if (qk) qk.hidden = el.dataset.v !== 'qk';
       if (el.parentNode.dataset.seg === 'dtype') {
         const keep = {};

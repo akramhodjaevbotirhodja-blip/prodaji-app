@@ -74,7 +74,7 @@
       const total = sum(items), paid = sum(pays), rest = total - paid;
       const pay_status = o.stage === 'Отменён' ? 'Отменён' : paid === 0 && total > 0 ? 'Не оплачено' : rest > 0 ? 'Частично' : 'Оплачено';
       return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount, ink, body, details, color }) => ({ product, qty, amount, ink, body, details, color })),
-        paid_click: sum(pays, 'click'), paid_paymi: sum(pays, 'paymi'), paid_card: sum(pays, 'card'), paid_terminal: sum(pays, 'terminal'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
+        paid_click: sum(pays, 'click'), paid_paymi: sum(pays, 'paymi'), paid_card: sum(pays, 'card'), paid_terminal: sum(pays, 'terminal'), paid_qk: sum(pays, 'qk'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
     };
     const sees = (o) => user.role === 'owner' || user.role === 'rop' || (user.role === 'designer'
       ? [o.designer_code, o.designer2_code].some((c) => c && c.toUpperCase() === user.code.toUpperCase()) || o.created_by === user.telegram_id
