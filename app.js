@@ -1491,8 +1491,8 @@
   const fileSize = (n) => (n > 1048576 ? (n / 1048576).toFixed(1).replace('.', ',') + ' МБ' : Math.max(1, Math.round(n / 1024)) + ' КБ');
   // у заказа несколько товаров — файл привязывается к своему: в группу цеха уходит только его файл
   // (не выбран — уходит во все группы заказа)
-  // Табличка, Бейдж, Наклейка, Сертификат — в списке всегда: файл уходит в их группу, даже если товара нет в заказе
-  const FILE_GROUPS = ['Табличка', 'Бейдж', 'Наклейка', 'Сертификат'];
+  // группы цехов — в списке всегда: файл уходит в группу, даже если такого товара нет в заказе
+  const FILE_GROUPS = ['Визитка', 'Печать', 'Табличка', 'Бейдж', 'Наклейка', 'Сертификат'];
   const fileProduct = (f, products, mode) => `<select class="fileprod" data-file-prod="${f.id ?? f.k}" data-mode="${mode}">
       <option value="">Во все группы</option>${[...new Set([...products, ...FILE_GROUPS])].map((p) => `<option${f.product === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select>`;
   const filesList = (list, act, products = []) => list.length ? `<div class="list">${list.map((f, k) => `<div class="row">
