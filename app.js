@@ -1491,8 +1491,10 @@
   const fileSize = (n) => (n > 1048576 ? (n / 1048576).toFixed(1).replace('.', ',') + ' МБ' : Math.max(1, Math.round(n / 1024)) + ' КБ');
   // у заказа несколько товаров — файл привязывается к своему: в группу цеха уходит только его файл
   // (не выбран — уходит во все группы заказа)
-  const fileProduct = (f, products, mode) => products.length > 1 ? `<select class="fileprod" data-file-prod="${f.id ?? f.k}" data-mode="${mode}">
-      <option value="">Во все группы</option>${products.map((p) => `<option${f.product === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select>` : '';
+  // Табличка, Бейдж, Наклейка, Сертификат — в списке всегда: файл уходит в их группу, даже если товара нет в заказе
+  const FILE_GROUPS = ['Табличка', 'Бейдж', 'Наклейка', 'Сертификат'];
+  const fileProduct = (f, products, mode) => `<select class="fileprod" data-file-prod="${f.id ?? f.k}" data-mode="${mode}">
+      <option value="">Во все группы</option>${[...new Set([...products, ...FILE_GROUPS])].map((p) => `<option${f.product === p ? ' selected' : ''}>${esc(p)}</option>`).join('')}</select>`;
   const filesList = (list, act, products = []) => list.length ? `<div class="list">${list.map((f, k) => `<div class="row">
       <div class="grow">${f.url ? `<a href="${esc(f.url)}" data-act="link">📄 ${esc(f.name)}</a>` : `📄 ${esc(f.name)}`}<div class="sub">${f.size ? fileSize(f.size) : ''}</div>
       ${fileProduct({ id: f.id, k, product: f.product }, [...new Set(products)], act)}</div>
@@ -1500,7 +1502,7 @@
   const paintFiles = () => {
     const box = document.getElementById('newFiles');
     const products = itemRows().map((r) => r.dataset.product);
-    S.files.forEach((f) => { if (f.product && !products.includes(f.product)) f.product = null; }); // товар убрали из заказа
+    S.files.forEach((f) => { if (f.product && !products.includes(f.product) && !FILE_GROUPS.includes(f.product)) f.product = null; }); // товар убрали из заказа
     if (box) box.innerHTML = filesList(S.files, 'filerm', products);
   };
   async function uploadFile(orderId, f, quiet = false) {
