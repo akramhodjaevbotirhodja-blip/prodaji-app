@@ -784,13 +784,14 @@
       const o = v.data;
       const names = (k, f = 'name') => S.dicts[k].filter((x) => x.active !== false).map((x) => x[f]);
       const staff = S.dicts.staff.filter((s) => s.active && !['spender', 'designer', 'rop'].includes(s.role)).map((s) => s.code);
-      const pickManager = isOwner() || isDesigner() || isRop();
+      // pick_manager — менеджер, с чьего Telegram заполняют заказы и за других (Kabulovich V и брат-дизайнер Азим)
+      const pickManager = isOwner() || isDesigner() || isRop() || !!S.user.pick_manager;
       v.after = () => { recalcForm(); if (o.design_urls?.length) copyDesigns(o.design_urls); };
       return `<h1>${o.id ? 'Заказ №' + o.id : o.repeat_of ? 'Повтор заказа №' + o.repeat_of : 'Новый заказ'}</h1>
         ${o.repeat_of ? '<p class="hint" style="margin:0 6px 10px">Проверьте суммы и дизайн — всё взято из старого заказа. Лишний дизайн уберите ✕.</p>' : ''}
         <div class="card">
           <div class="grid2"><div><label>Дата</label><input type="date" name="order_date" value="${o.order_date || today()}"></div>
-          <div><label>Менеджер</label>${pickManager ? `<select name="manager_code">${opts(staff, o.manager_code || (isOwner() ? S.user.code : ''))}</select>` : `<input value="${esc(S.user.code)}" disabled>`}</div></div>
+          <div><label>Менеджер</label>${pickManager ? `<select name="manager_code">${opts(staff, o.manager_code || (isOwner() || S.user.pick_manager ? S.user.code : ''))}</select>` : `<input value="${esc(S.user.code)}" disabled>`}</div></div>
           <div class="grid2"><div><label>Дизайнер</label><select name="designer_code">${opts(names('designers', 'code'), o.designer_code || (!o.id && isDesigner() ? myDesignerCode() : ''))}</select></div>
           <div><label>Источник</label><select name="source" data-input="source">${opts(names('sources'), o.source)}</select></div></div>
           ${o.designer2_code ? `<label>2-й дизайнер (из объединённого заказа)</label>
