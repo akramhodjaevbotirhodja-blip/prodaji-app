@@ -46,6 +46,9 @@
   // РОП (руководитель отдела продаж): все заказы и результаты менеджеров, но без финансов, сотрудников и удаления
   const isRop = () => S.user && S.user.role === 'rop';
   const seesAll = () => isOwner() || isRop();
+  // роль «Молиячи»: только «Ещё» — своя Google-таблица и копирование туда Лист2 файла дня; РОП так же копирует Лист5
+  const isFinance = () => S.user && S.user.role === 'finance';
+  const copySheet = () => (isFinance() ? 'Лист2' : isRop() ? 'Лист5' : '');
   // код сотрудника заглавный (ZU), в справочнике дизайнеров — Zu
   const myDesignerCode = () => (S.dicts.designers.find((d) => d.code.toUpperCase() === String(S.user.code).toUpperCase()) || {}).code || '';
   // «➕ Новый вид расхода»: свой вид вписывают в поле под списком, сервер добавит его в справочник
@@ -71,8 +74,8 @@
   }
   const ROLE_NAMES = { manager: 'Менеджер (видит свои заказы)', designer: 'Дизайнер (видит заказы со своим дизайном)',
     rop: 'РОП (все заказы, без финансов)',
-    spender: 'Расходы (вносит только расходы)', owner: 'Руководитель (видит всё)' };
-  const roleBadge = (r) => ({ owner: 'руковод.', designer: 'дизайнер', spender: 'расходы', rop: 'РОП' }[r] || 'менеджер');
+    spender: 'Расходы (вносит только расходы)', finance: 'Молиячи (копирует Лист2 дня в свою таблицу)', owner: 'Руководитель (видит всё)' };
+  const roleBadge = (r) => ({ owner: 'руковод.', designer: 'дизайнер', spender: 'расходы', rop: 'РОП', finance: 'молиячи' }[r] || 'менеджер');
   // window.confirm в Telegram Desktop не показывается и сразу возвращает false, поэтому спрашиваем через Telegram
   const ask = (msg) => new Promise((res) => (tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')
     ? tg.showConfirm(msg, res) : res(window.confirm(msg))));
@@ -385,8 +388,20 @@
 
     async more() {
       const u = S.user;
-      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : isRop() ? 'РОП' : isSpender() ? 'Расходы · ' + esc(u.code) : isDesigner() ? 'Дизайнер ' + esc(u.code) : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
+      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : isRop() ? 'РОП' : isSpender() ? 'Расходы · ' + esc(u.code) : isFinance() ? 'Молиячи · ' + esc(u.code) : isDesigner() ? 'Дизайнер ' + esc(u.code) : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
         <div class="hint">Версия приложения ${esc(VERSION)}</div></div>`;
+      if (copySheet()) {
+        const sh = copySheet(), dm = today().slice(8, 10) + '.' + today().slice(5, 7);
+        const link = u.fin_sheet ? `https://docs.google.com/spreadsheets/d/${u.fin_sheet}/edit` : '';
+        html += `<h2>Ойлик жадвал</h2>
+        <div class="card"><div class="hint" style="margin-bottom:8px">Ўз Google-жадвалингиз ҳаволасини қўйинг. Жадвални олдин «Настройки доступа → Редактор» орқали дастур аккаунтига очинг — сақлаганда текширилади, доступ бўлмаса қайси аккаунтга очиш кераклиги ёзилади.</div>
+          <input id="finLink" placeholder="https://docs.google.com/spreadsheets/d/…" value="${esc(link)}" autocomplete="off">
+          <button class="btn sm" data-act="finsave" style="margin-top:6px">Сақлаш</button>
+          ${link ? `<div class="hint" style="margin-top:6px"><a href="${esc(link)}" target="_blank">Жадвални очиш</a></div>` : ''}</div>
+        <h2>Кунлик жадвални кўчириш</h2>
+        <div class="card"><div class="hint" style="margin-bottom:8px">Кун файлидан ${sh} жадвалингизга алоҳида лист бўлиб тушади («${dm} ${sh}»). Қайта кўчирсангиз, ўша кун листи янгиланади.</div>
+          <div style="display:flex;gap:6px"><input type="date" id="finDate" value="${today()}" max="${today()}"><button class="btn sm" data-act="fincopy" ${u.fin_sheet ? '' : 'disabled'}>Кўчириш</button></div></div>`;
+      }
       if (!isOwner()) return html;
       const free = S.dicts.staff.filter((s) => s.active && !s.telegram_id).map((s) => s.code);
       if (S.requests.length) html += `<h2>Заявки на доступ</h2>${S.requests.map((r) => `
@@ -783,7 +798,7 @@
     async form(v) {
       const o = v.data;
       const names = (k, f = 'name') => S.dicts[k].filter((x) => x.active !== false).map((x) => x[f]);
-      const staff = S.dicts.staff.filter((s) => s.active && !['spender', 'designer', 'rop'].includes(s.role)).map((s) => s.code);
+      const staff = S.dicts.staff.filter((s) => s.active && !['spender', 'designer', 'rop', 'finance'].includes(s.role)).map((s) => s.code);
       // pick_manager — менеджер, с чьего Telegram заполняют заказы и за других (Kabulovich V и брат-дизайнер Азим)
       const pickManager = isOwner() || isDesigner() || isRop() || !!S.user.pick_manager;
       v.after = () => { recalcForm(); if (o.design_urls?.length) copyDesigns(o.design_urls); };
@@ -1158,6 +1173,20 @@
       const inp = $app.querySelector(`[data-dict=${el.dataset.kind}]`);
       if (!inp.value.trim()) return;
       const res = await call('dict_add', { kind: el.dataset.kind, name: inp.value.trim() }); setMe(res); toast('Добавлено'); render();
+    },
+    async finsave(el) {
+      el.disabled = true; toast('Текширяпман…');
+      try {
+        const r = await call('fin_sheet_set', { link: document.getElementById('finLink').value });
+        S.user.fin_sheet = r.fin_sheet; haptic('success'); toast(r.fin_sheet ? 'Сақланди' : 'Ҳавола ўчирилди'); render();
+      } finally { el.disabled = false; }
+    },
+    async fincopy(el) {
+      const date = document.getElementById('finDate').value;
+      if (!date) return toast('Санани танланг');
+      el.disabled = true; toast('Кўчиряпман…');
+      try { const r = await call('fin_copy', { date }); haptic('success'); toast('Тайёр: ' + r.sheets.join(', ')); }
+      finally { el.disabled = false; }
     },
     async sheetsync(el) {
       const date = document.getElementById('syncDate').value;
@@ -1626,7 +1655,7 @@
     if (!window.IS_DEMO) return '';
     const cur = new URLSearchParams(location.search).get('demo') || 'owner';
     return `<div class="demo-bar">Демо-режим, данные не сохраняются. Смотреть как:
-      <select data-demo>${['owner', 'rop', 'spender', 'designer', 'MY', 'SH', 'D', 'V'].map((r) => `<option ${r === cur ? 'selected' : ''} value="${r}">${r === 'owner' ? 'руководитель' : r === 'rop' ? 'РОП' : r === 'spender' ? 'расходы' : r === 'designer' ? 'дизайнер' : 'менеджер ' + r}</option>`).join('')}</select></div>`;
+      <select data-demo>${['owner', 'rop', 'spender', 'finance', 'designer', 'MY', 'SH', 'D', 'V'].map((r) => `<option ${r === cur ? 'selected' : ''} value="${r}">${r === 'owner' ? 'руководитель' : r === 'rop' ? 'РОП' : r === 'spender' ? 'расходы' : r === 'finance' ? 'молиячи' : r === 'designer' ? 'дизайнер' : 'менеджер ' + r}</option>`).join('')}</select></div>`;
   }
 
   // ---------- старт ----------
@@ -1650,6 +1679,10 @@
       if (isSpender()) {
         [...$tabs.children].forEach((b) => { b.hidden = !['spend', 'more'].includes(b.dataset.tab); });
         S.tab = 'spend';
+      }
+      if (isFinance()) {
+        [...$tabs.children].forEach((b) => { b.hidden = b.dataset.tab !== 'more'; });
+        S.tab = 'more';
       }
       if (new URLSearchParams(location.search).get('tab') === 'more') S.tab = 'more'; // кнопка из уведомления о заявке
       render();

@@ -26,8 +26,8 @@
   // ---------- демо ----------
   const STAGES = ['Потребность выявлена', 'Дизайн готов', 'Производство', 'Частично оплачено', 'Оплачено', 'Доставка', 'Почта', 'Сделка закрыта', 'Отменён'];
   const demoDicts = {
-    staff: ['MY', 'SH', 'D', 'V', 'OY', 'YO'].map((c, i) => ({ code: c, name: c, telegram_id: i < 4 ? 1000 + i : null, role: 'manager', active: true })),
-    designers: ['1A', 'IK', 'F', 'N', 'Zu', 'Lu', 'AS', 'AD', 'AO', 'AB', 'R'].map((code) => ({ code, active: true })),
+    staff: ['MY', 'SH', 'K', 'V', 'OY', 'YN'].map((c, i) => ({ code: c, name: c, telegram_id: i < 4 ? 1000 + i : null, role: 'manager', active: true })),
+    designers: ['1A', 'IK', 'F', 'N', 'Zu', 'Lu', 'AS', 'AD', 'AO', 'AB', 'R', 'M'].map((code) => ({ code, active: true })),
     sources: ['Instagram', '1 Pechat', '2 Botir', '3 Uz pechat', 'Повторный клиент', 'Рекомендация', 'Сайт', 'Звонок', 'Другое'].map((name) => ({ name, active: true })),
     products: ['Печать автомат', 'Печать пластик', 'Печать металл', 'Штамп', 'Датер', 'Номератор', 'Табличка', 'Бейдж', 'Наклейка',
       'Сертификат', 'Визитка', 'Баннер', 'Логотип / дизайн', 'Подушка', 'Краска', 'Пакеты', 'Другое'].map((name) => ({ name, active: true, ink: /^(Печать|Штамп|Датер|Номератор)/.test(name), body: name === 'Печать автомат' })),
@@ -65,6 +65,7 @@
       : role === 'spender' ? { telegram_id: 3, name: 'Расходы (демо)', role: 'spender', code: 'KS' }
       : role === 'designer' ? { telegram_id: 4, name: 'Дизайнер (демо)', role: 'designer', code: 'ZU' }
       : role === 'rop' ? { telegram_id: 5, name: 'РОП (демо)', role: 'rop', code: 'ROP' }
+      : role === 'finance' ? { telegram_id: 6, name: 'Молиячи (демо)', role: 'finance', code: 'FIN', fin_sheet: null }
       : { telegram_id: 2, name: role + ' (демо)', role: 'manager', code: role };
 
     const view = (o) => {
