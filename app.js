@@ -48,6 +48,8 @@
   const seesAll = () => isOwner() || isRop();
   // роль «Молиячи»: только «Ещё» — своя Google-таблица и копирование туда Лист2 файла дня; РОП так же копирует Лист5
   const isFinance = () => S.user && S.user.role === 'finance';
+  // роль «Доставка»: только «Ещё»; бот присылает ей «қарзи йўқ — доставка ёки ўзи олиб кетади»
+  const isDelivery = () => S.user && S.user.role === 'delivery';
   const copySheet = () => (isFinance() ? 'Лист2' : isRop() ? 'Лист5' : '');
   // код сотрудника заглавный (ZU), в справочнике дизайнеров — Zu
   const myDesignerCode = () => (S.dicts.designers.find((d) => d.code.toUpperCase() === String(S.user.code).toUpperCase()) || {}).code || '';
@@ -74,8 +76,9 @@
   }
   const ROLE_NAMES = { manager: 'Менеджер (видит свои заказы)', designer: 'Дизайнер (видит заказы со своим дизайном)',
     rop: 'РОП (все заказы, без финансов)',
-    spender: 'Расходы (вносит только расходы)', finance: 'Молиячи (копирует Лист2 дня в свою таблицу)', owner: 'Руководитель (видит всё)' };
-  const roleBadge = (r) => ({ owner: 'руковод.', designer: 'дизайнер', spender: 'расходы', rop: 'РОП', finance: 'молиячи' }[r] || 'менеджер');
+    spender: 'Расходы (вносит только расходы)', finance: 'Молиячи (копирует Лист2 дня в свою таблицу)',
+    delivery: 'Доставка (получает в боте оплаченные заказы на доставку)', owner: 'Руководитель (видит всё)' };
+  const roleBadge = (r) => ({ owner: 'руковод.', designer: 'дизайнер', spender: 'расходы', rop: 'РОП', finance: 'молиячи', delivery: 'доставка' }[r] || 'менеджер');
   // window.confirm в Telegram Desktop не показывается и сразу возвращает false, поэтому спрашиваем через Telegram
   const ask = (msg) => new Promise((res) => (tg && tg.initData && tg.isVersionAtLeast && tg.isVersionAtLeast('6.2')
     ? tg.showConfirm(msg, res) : res(window.confirm(msg))));
@@ -388,8 +391,10 @@
 
     async more() {
       const u = S.user;
-      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : isRop() ? 'РОП' : isSpender() ? 'Расходы · ' + esc(u.code) : isFinance() ? 'Молиячи · ' + esc(u.code) : isDesigner() ? 'Дизайнер ' + esc(u.code) : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
+      let html = `<h1>Ещё</h1><div class="card"><b>${esc(u.name)}</b><div class="hint">${isOwner() ? 'Руководитель' : isRop() ? 'РОП' : isSpender() ? 'Расходы · ' + esc(u.code) : isFinance() ? 'Молиячи · ' + esc(u.code) : isDelivery() ? 'Доставка · ' + esc(u.code) : isDesigner() ? 'Дизайнер ' + esc(u.code) : 'Менеджер ' + esc(u.code)} · Telegram ID ${u.telegram_id}</div>
         <div class="hint">Версия приложения ${esc(VERSION)}</div></div>`;
+      if (isDelivery()) html += `<div class="card">🚚 Тўлови тўлиқ бўлган заказлар ҳақида бот шу Telegram'га хабар юборади: «Қарзи йўқ — доставка қилинг ёки мижоз ўзи олиб кетади».
+        <div class="hint" style="margin-top:6px">Хабар келиши учун @pechat_sotuv_bot'да Start босилган бўлиши керак.</div></div>`;
       if (copySheet()) {
         const sh = copySheet(), dm = today().slice(8, 10) + '.' + today().slice(5, 7);
         const link = u.fin_sheet ? `https://docs.google.com/spreadsheets/d/${u.fin_sheet}/edit` : '';
@@ -798,7 +803,7 @@
     async form(v) {
       const o = v.data;
       const names = (k, f = 'name') => S.dicts[k].filter((x) => x.active !== false).map((x) => x[f]);
-      const staff = S.dicts.staff.filter((s) => s.active && !['spender', 'designer', 'rop', 'finance'].includes(s.role)).map((s) => s.code);
+      const staff = S.dicts.staff.filter((s) => s.active && !['spender', 'designer', 'rop', 'finance', 'delivery'].includes(s.role)).map((s) => s.code);
       // pick_manager — менеджер, с чьего Telegram заполняют заказы и за других (Kabulovich V и брат-дизайнер Азим)
       const pickManager = isOwner() || isDesigner() || isRop() || !!S.user.pick_manager;
       v.after = () => { recalcForm(); if (o.design_urls?.length) copyDesigns(o.design_urls); };
@@ -1680,7 +1685,7 @@
         [...$tabs.children].forEach((b) => { b.hidden = !['spend', 'more'].includes(b.dataset.tab); });
         S.tab = 'spend';
       }
-      if (isFinance()) {
+      if (isFinance() || isDelivery()) {
         [...$tabs.children].forEach((b) => { b.hidden = b.dataset.tab !== 'more'; });
         S.tab = 'more';
       }
