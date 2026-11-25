@@ -383,9 +383,10 @@
     async dashboard() {
       const p = S.dash;
       const r = p.period === 'custom' ? { from: p.from, to: p.to } : range(p.period);
-      const [list, debts, fin, stock] = await Promise.all([cached('orders', r), cached('orders', { debt: true }),
-        isOwner() ? cached('finance', r) : null, cached('stock', {}).catch(() => null)]);
-      return dashboardHtml(list.filter((o) => o.stage !== 'Отменён'), debts, r, fin, stock);
+      const [list, debts, fin, stock, workers] = await Promise.all([cached('orders', r), cached('orders', { debt: true }),
+        isOwner() ? cached('finance', r) : null, cached('stock', {}).catch(() => null),
+        seesAll() ? cached('workers', r).catch(() => null) : null]);
+      return dashboardHtml(list.filter((o) => o.stage !== 'Отменён'), debts, r, fin, stock, workers);
     },
 
     // роль «Расходы»: свои расходы (тот же экран, что у руководителя из дашборда)
@@ -508,6 +509,24 @@
       <button class="btn ghost" data-act="expense">+ Добавить расход</button>`;
   }
 
+  // Ходимлар: печатчики, кесувчилар, доставка — сколько сделали за период и за сколько (медиана), что сейчас ждёт
+  const durFmt = (m) => (m == null ? '—' : m < 60 ? `${m} дақ` : m < 1440 ? `${Math.floor(m / 60)} соат${m % 60 ? ' ' + (m % 60) + ' дақ' : ''}` : `${Math.floor(m / 1440)} кун ${Math.floor((m % 1440) / 60)} соат`);
+  function workersHtml(w) {
+    if (!w) return '';
+    const block = (title, rows, unit, from) => `<h3 style="margin:14px 6px 6px;font-size:15px">${title}</h3>${rows.length ? bars(rows.map((g) => ({ ...g, k: g.name, sum: g.n })),
+      (g) => `<b>${g.n}</b> ${unit} · ${durFmt(g.median_min)}${Object.keys(g.what || {}).length > 1 ? `<div class="hint">${Object.entries(g.what).map(([c, n]) => `${esc(c)} ${n}`).join(' · ')}</div>` : ''}`)
+      : `<div class="card hint">${from ? `Ҳали маълумот йўқ — ${from} дан ёзиб борилади` : 'Бу даврда йўқ'}</div>`}`;
+    const wait = w.waiting.filter((x) => x.n);
+    return `<h2>Ходимлар</h2>
+      ${wait.length ? `<div class="kpis">${wait.map((x) => `<div class="kpi alert"><div class="k">${esc(x.label)}</div><div class="v">${x.n}</div>
+        <div class="hint">энг эскиси ${durFmt(x.oldest_min)}${Object.keys(x.by).length ? '<br>' + Object.entries(x.by).map(([c, n]) => `${esc(c)} ${n}`).join(' · ') : ''}</div></div>`).join('')}</div>`
+        : '<div class="card hint">Ҳозир ҳеч нарса кутиб турмаяпти ✅</div>'}
+      ${block('🖨 Печатчилар', w.printers, 'та печат', '')}
+      ${block('✂️ Кесувчилар', w.cutters, 'та кесди', '')}
+      ${block('🚚 Доставка', w.delivery, 'та кетди', fmtDate(w.delivery_since))}
+      <p class="hint" style="margin:6px">Вақт — ўртача (медиана): печат — заказ цехга тушгандан, кесиш — печатдан, доставка — «тайёр» бўлгандан кейин. Тун ҳам ҳисобга киради.</p>`;
+  }
+
   // ---------- склад ----------
   const qtyFmt = (n) => String(Math.round(Number(n) * 100) / 100).replace('.', ',');
   const isLow = (r) => r.stock !== null && r.min_qty !== null && Number(r.stock) < Number(r.min_qty);
@@ -529,7 +548,7 @@
 
   // раздел дашборда: на компьютере разделы встают колонками и не разрываются
   const sec = (html) => (html ? `<section>${html}</section>` : '');
-  function dashboardHtml(list, debts, r, fin, stock) {
+  function dashboardHtml(list, debts, r, fin, stock, workers) {
     const p = S.dash;
     const sum = list.reduce((s, o) => s + o.total, 0), paid = list.reduce((s, o) => s + o.paid, 0);
     const priced = list.filter((o) => o.total > 0).length; // заказы из amoCRM без суммы не портят средний чек
@@ -560,6 +579,7 @@
       <div class="dash-cols">
       ${sec(stockHtml(stock))}
       ${sec(financeHtml(fin))}
+      ${sec(workersHtml(workers))}
       ${seesAll() ? `<section><h2>Менеджеры</h2><div class="list">${mgr.map((g) => `<div class="row" style="display:block">
           <div style="display:flex;justify-content:space-between"><b>${esc(g.k)}</b><span class="amt"><b>${money(g.sum)}</b> · ${g.n} зак.</span></div>
           <div class="bar"><i class="paid" style="width:${g.sum ? (g.paid / g.sum) * 100 : 0}%"></i><i class="rest" style="width:${g.sum ? (g.rest / g.sum) * 100 : 0}%"></i></div>

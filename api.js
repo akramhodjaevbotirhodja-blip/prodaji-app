@@ -178,6 +178,14 @@
         return A.me();
       },
       sheets_sync: (p) => ({ count: db.orders.filter((o) => o.order_date === p.date).length }),
+      workers: () => ({
+        printers: [{ name: 'Iskandar', n: 23, median_min: 48, what: { Vizitkalar: 12, Nakleyka: 9, Raspechatka: 2 } }, { name: 'Достон', n: 6, median_min: 190, what: { Pechat: 6 } }],
+        cutters: [{ name: 'Iskandar', n: 6, median_min: 35, what: { Vizitkalar: 2, Nakleyka: 4 } }],
+        delivery: [],
+        waiting: [{ label: 'Печат кутяпти', n: 4, oldest_min: 600, by: { Nakleyka: 3, Vizitkalar: 1 } }, { label: 'Кесиш кутяпти', n: 0, oldest_min: null, by: {} },
+          { label: 'Доставка кутяпти', n: 2, oldest_min: 75, by: {} }],
+        delivery_since: '2026-11-26',
+      }),
       finance: (p) => {
         const inRange = (d) => (!p.from || d >= p.from) && (!p.to || d <= p.to);
         return { payments: db.payments.filter((x) => inRange(x.paid_at)),
