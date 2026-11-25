@@ -1378,6 +1378,8 @@
 
   // ряды чипов на компьютере: колесо мыши и перетаскивание листают их вбок (на телефоне — обычный свайп)
   $app.addEventListener('wheel', (e) => {
+    // колесо мыши над полем с числом (сумма, штуки) не должно менять число: убираем фокус — страница просто листается
+    if (e.target.matches('input[type=number]') && e.target === document.activeElement) { e.target.blur(); return; }
     const row = e.target.closest('.chips:not(.wrap)');
     if (row && row.scrollWidth > row.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) { row.scrollLeft += e.deltaY; e.preventDefault(); }
   }, { passive: false });
