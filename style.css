@@ -152,6 +152,7 @@ label { display: block; font-size: 13px; color: var(--hint); margin: 10px 2px 4p
 .mv { display: grid; grid-template-columns: 1fr 90px 34px; gap: 6px; align-items: center; padding: 4px 0; }
 .mv button { border: 0; background: none; color: var(--red); font-size: 22px; cursor: pointer; }
 .srow { display: grid; grid-template-columns: 1fr 84px 84px; gap: 6px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--sep); }
+.srow.s4 { grid-template-columns: 1fr 72px 72px 72px; }
 .srow:last-child { border-bottom: 0; }
 .srow > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .srow input { min-height: 36px; padding: 6px 8px; }

@@ -77,6 +77,18 @@
       return { ...o, total, paid, rest, pay_status, items: items.map(({ product, qty, amount, ink, body, details, color }) => ({ product, qty, amount, ink, body, details, color })),
         paid_click: sum(pays, 'click'), paid_paymi: sum(pays, 'paymi'), paid_card: sum(pays, 'card'), paid_terminal: sum(pays, 'terminal'), paid_qk: sum(pays, 'qk'), paid_cash: sum(pays, 'cash'), paid_transfer: sum(pays, 'transfer') };
     };
+    // продажи товара по дням, доля перечисления (transfer + terminal) — как order_transfer_share на сервере
+    const demoSales = (product) => {
+      const by = {};
+      db.items.filter((it) => it.product === product).forEach((it) => {
+        const o = db.orders.find((x) => x.id === it.order_id && x.stage !== 'Отменён' && !x.merged_into);
+        if (!o) return;
+        const v = view(o), t = v.paid_transfer + v.paid_terminal, base = Math.max(v.total, v.paid), share = base > 0 ? t / base : 0;
+        const d = by[o.order_date] || (by[o.order_date] = { day: o.order_date, sold: 0, sold_t: 0 });
+        d.sold += Number(it.qty); d.sold_t += Number(it.qty) * share;
+      });
+      return Object.values(by);
+    };
     const sees = (o) => user.role === 'owner' || user.role === 'rop' || (user.role === 'designer'
       ? [o.designer_code, o.designer2_code].some((c) => c && c.toUpperCase() === user.code.toUpperCase()) || o.created_by === user.telegram_id
         || (o.created_by == null && o.stage === 'Дизайн готов' && (!o.created_at || o.created_at >= new Date(Date.now() - 7 * 864e5).toISOString())) : o.manager_code === user.code);
@@ -204,7 +216,7 @@
         if (cur) Object.assign(cur, row); else db.expenses.push(cur = { id: seq.e++, ...row, created_by: user.telegram_id });
         // как сервер: закуп приходует товар на склад, приход пересобирается при правке
         db.moves = db.moves.filter((m) => m.expense_id !== cur.id);
-        row.goods.forEach((g) => db.moves.push({ id: seq.m++, ...g, kind: 'in', moved_at: row.spent_at, comment: 'Закуп: ' + (row.comment || row.category), expense_id: cur.id }));
+        row.goods.forEach((g) => db.moves.push({ id: seq.m++, ...g, kind: 'in', pay: ['transfer', 'terminal'].includes(row.method) ? 'transfer' : 'cash', moved_at: row.spent_at, comment: 'Закуп: ' + (row.comment || row.category), expense_id: cur.id }));
         return { ok: true };
       },
       expense_delete: (p) => {
@@ -217,28 +229,44 @@
         const mv = db.moves.filter((m) => m.product === x.name);
         const base = c ? c.month : mv.map((m) => m.moved_at).sort()[0] || null;
         const after = (d) => base && d >= base;
-        const sumMv = (k) => mv.filter((m) => m.kind === k && after(m.moved_at)).reduce((s, m) => s + m.qty, 0);
-        const sold = db.items.filter((it) => it.product === x.name && after((db.orders.find((o) => o.id === it.order_id && o.stage !== 'Отменён') || {}).order_date || ''))
-          .reduce((s, it) => s + Number(it.qty), 0);
-        const opening = c ? c.qty : 0, incoming = sumMv('in'), outgoing = sumMv('out');
-        return { product: x.name, base_date: base, opening, incoming, outgoing, sold, sort: i,
-          stock: base ? opening + incoming - outgoing - sold : null, min_qty: x.min_qty ?? null, low_alerted: false };
+        const sumMv = (k, t) => mv.filter((m) => m.kind === k && after(m.moved_at) && (!t || m.pay === 'transfer')).reduce((s, m) => s + m.qty, 0);
+        const its = demoSales(x.name).filter((d) => after(d.day));
+        const sold = its.reduce((s, d) => s + d.sold, 0), sold_t = its.reduce((s, d) => s + d.sold_t, 0), shifted = sumMv('shift');
+        const opening_t = c ? c.qty_t || 0 : 0, opening = c ? c.qty + opening_t : 0;
+        const incoming = sumMv('in'), incoming_t = sumMv('in', 1), outgoing = sumMv('out'), outgoing_t = sumMv('out', 1);
+        const stock_t = opening_t + incoming_t - outgoing_t - sold_t - shifted, stock = opening + incoming - outgoing - sold;
+        return { product: x.name, base_date: base, opening, opening_t, incoming, incoming_t, outgoing, outgoing_t, sold, sold_t, shifted, sort: i,
+          stock: base ? stock : null, stock_t: base ? stock_t : null, stock_c: base ? stock - stock_t : null, min_qty: x.min_qty ?? null, low_alerted: false };
       }),
-      stock_item: (p) => ({ ...A.stock().find((r) => r.product === p.product),
-        counts: db.counts.filter((r) => r.product === p.product).sort((a, b) => b.month.localeCompare(a.month)),
-        moves: db.moves.filter((m) => m.product === p.product).sort((a, b) => b.id - a.id) }),
+      stock_item: (p) => {
+        const r = A.stock().find((x) => x.product === p.product);
+        const sh = db.moves.filter((m) => m.product === p.product && m.kind === 'shift');
+        const days = demoSales(p.product).filter((d) => r.base_date && d.day >= r.base_date);
+        sh.forEach((m) => { if (!days.find((d) => d.day === m.moved_at)) days.push({ day: m.moved_at, sold: 0, sold_t: 0 }); });
+        return { ...r,
+          counts: db.counts.filter((x) => x.product === p.product).sort((a, b) => b.month.localeCompare(a.month)),
+          moves: db.moves.filter((m) => m.product === p.product).sort((a, b) => b.id - a.id),
+          sales: days.map((d) => ({ ...d, shifted: sh.filter((m) => m.moved_at === d.day).reduce((s, m) => s + m.qty, 0) })).sort((a, b) => b.day.localeCompare(a.day)) };
+      },
+      stock_shift: (p) => {
+        const r = A.stock_item(p), d = r.sales.find((x) => x.day === p.day), qty = Number(p.qty);
+        if (r.stock_t - qty < 0) throw new Error('Остаток перечисления ' + r.stock_t + ' — больше перевести нельзя');
+        if (!d || d.sold - d.sold_t - d.shifted < qty) throw new Error('За этот день за нақд продано меньше');
+        db.moves.push({ id: seq.m++, product: p.product, kind: 'shift', pay: 'transfer', qty, moved_at: p.day, comment: null });
+        return { ok: true };
+      },
       stock_in: (p) => {
         (p.items || []).filter((i) => i.product && Number(i.qty) > 0).forEach((i) => db.moves.push({ id: seq.m++, product: i.product,
-          kind: p.kind === 'out' ? 'out' : 'in', qty: Number(i.qty), moved_at: p.moved_at || iso(new Date()), comment: p.comment || null }));
+          kind: p.kind === 'out' ? 'out' : 'in', pay: p.pay === 'transfer' ? 'transfer' : 'cash', qty: Number(i.qty), moved_at: p.moved_at || iso(new Date()), comment: p.comment || null }));
         return { ok: true };
       },
       stock_move_delete: (p) => { db.moves = db.moves.filter((m) => m.id !== Number(p.id)); return { ok: true }; },
       stock_count: (p) => {
         const month = p.month + '-01';
         (p.rows || []).forEach((r) => {
-          if (r.qty !== '' && r.qty != null) {
+          if ((r.qty !== '' && r.qty != null) || (r.qty_t !== '' && r.qty_t != null)) {
             db.counts = db.counts.filter((c) => !(c.product === r.product && c.month === month));
-            db.counts.push({ product: r.product, month, qty: Number(r.qty) });
+            db.counts.push({ product: r.product, month, qty: Number(r.qty || 0), qty_t: Number(r.qty_t || 0) });
           }
           if (r.min_qty !== undefined) demoDicts.products.find((x) => x.name === r.product).min_qty = r.min_qty === '' ? null : Number(r.min_qty);
         });

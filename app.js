@@ -412,6 +412,7 @@
         <div class="card"><div class="hint" style="margin-bottom:8px">Кун файлидан ${sh} жадвалингизга алоҳида лист бўлиб тушади («${dm} ${sh}»). Қайта кўчирсангиз, ўша кун листи янгиланади.</div>
           <div style="display:flex;gap:6px"><input type="date" id="finDate" value="${today()}" max="${today()}"><button class="btn sm" data-act="fincopy" ${u.fin_sheet ? '' : 'disabled'}>Кўчириш</button></div></div>`;
       }
+      if (isFinance()) html += `<h2>Склад</h2><button class="btn ghost" data-act="stock">Склад: перечисление и нақд →</button>`;
       if (!isOwner()) return html;
       const free = S.dicts.staff.filter((s) => s.active && !s.telegram_id).map((s) => s.code);
       if (S.requests.length) html += `<h2>Заявки на доступ</h2>${S.requests.map((r) => `
@@ -537,7 +538,7 @@
   const stockRow = (r) => `<div class="row tap" data-act="stockitem" data-v="${esc(r.product)}">
     <div class="grow"><div class="title">${esc(r.product)}</div>
     <div class="sub">${r.stock === null ? 'склад не ведётся' : r.min_qty !== null ? 'минимум ' + qtyFmt(r.min_qty) : 'минимум не задан'}</div></div>
-    <div class="amt"><b class="${isLow(r) ? 'red' : ''}">${r.stock === null ? '—' : qtyFmt(r.stock)}</b>${isLow(r) ? '<div><span class="badge b-red">мало</span></div>' : ''}</div></div>`;
+    <div class="amt"><b class="${isLow(r) ? 'red' : ''}">${r.stock === null ? '—' : qtyFmt(r.stock)}</b>${r.stock === null ? '' : `<div class="sub">П ${qtyFmt(r.stock_t)} · Н ${qtyFmt(r.stock_c)}</div>`}${isLow(r) ? '<div><span class="badge b-red">мало</span></div>' : ''}</div></div>`;
   function stockHtml(rows) {
     if (!rows) return '';
     const kept = rows.filter((r) => r.stock !== null), low = kept.filter(isLow).sort(stockOrder);
@@ -665,11 +666,17 @@
         ${isOwner() ? `<div class="grid2"><button class="btn" style="margin:0" data-act="stockin" data-v="in">+ Приход товара</button>
           <button class="btn ghost" style="margin:0" data-act="stockin" data-v="out">− Списание</button></div>
           <button class="btn ghost" data-act="stockcount">Остатки на начало месяца и минимумы</button>` : ''}
+        ${(() => { const k = rows.filter((r) => r.stock !== null), sum = (f) => k.reduce((a, r) => a + Number(r[f]), 0);
+          return k.length ? `<div class="kpis"><div class="kpi"><div class="k">Перечисление</div><div class="v">${qtyFmt(sum('stock_t'))}</div></div>
+            <div class="kpi"><div class="k">Нақд</div><div class="v">${qtyFmt(sum('stock_c'))}</div></div>
+            <div class="kpi"><div class="k">Всего</div><div class="v">${qtyFmt(sum('stock'))}</div></div></div>` : ''; })()}
         <h2>${rows.filter((r) => r.stock !== null).length} товаров на складе${low ? ` · <span class="red">мало осталось: ${low}</span>` : ''}</h2>
         <input class="search" type="search" placeholder="Поиск товара" value="${esc(S.stockQ || '')}" data-input="sq">
         <div class="list">${shown.map(stockRow).join('') || '<div class="center hint">Ничего не нашлось</div>'}</div>
         <p class="hint" style="margin:10px 6px">Остаток = на начало месяца + приход − списание − продано в заказах.
           Заказ уменьшает склад сразу при сохранении, отменённый заказ возвращает товар.
+          П — перечисление, Н — нақд. Продажа по перечислению или терминалу уменьшает П, остальные оплаты
+          (нақд, карта, Click, Payme, QK) и неоплаченное — Н; заказ со смешанной оплатой делится по суммам.
           Когда остаток опускается ниже минимума, бот пишет в группу «Pechat24 operator».</p>`;
     },
 
@@ -682,25 +689,42 @@
           <div class="v">${r.stock === null ? '—' : qtyFmt(r.stock) + ' шт.'}</div>
           <div class="hint">${r.stock === null ? 'Склад по этому товару не ведётся — внесите остаток на начало месяца или приход'
             : r.min_qty !== null ? (isLow(r) ? 'меньше минимума ' : 'минимум ') + qtyFmt(r.min_qty) : 'минимум не задан'}</div></div></div>
-        ${r.stock === null ? '' : `<div class="card" style="margin-top:8px">
-          ${line(r.opening ? `На начало, ${fmtDate(r.base_date)}` : `С ${fmtDate(r.base_date)}`, qtyFmt(r.opening))}
-          ${line('Приход', '+' + qtyFmt(r.incoming), 'green')}
-          ${Number(r.outgoing) ? line('Списание', '−' + qtyFmt(r.outgoing), 'red') : ''}
-          ${line('Продано в заказах', '−' + qtyFmt(r.sold), 'red')}
-          <div class="total-line big"><span>Остаток</span><span>${qtyFmt(r.stock)}</span></div></div>`}
+        ${r.stock === null ? '' : (() => {
+          const c = (a, b) => qtyFmt(Number(a) - Number(b));
+          const soldT = Number(r.sold_t) + Number(r.shifted), soldC = Number(r.sold) - soldT;
+          const tl = (t, a, b, sum, cls = '') => `<div class="srow s4"><span>${t}</span><b class="${cls}">${a}</b><b class="${cls}">${b}</b><b class="${cls}">${sum}</b></div>`;
+          return `<div class="card" style="margin-top:8px"><div class="srow s4 hint"><span></span><span>Перечисл.</span><span>Нақд</span><span>Всего</span></div>
+          ${tl(r.opening ? `На начало, ${fmtDate(r.base_date)}` : `С ${fmtDate(r.base_date)}`, qtyFmt(r.opening_t), c(r.opening, r.opening_t), qtyFmt(r.opening))}
+          ${tl('Приход', '+' + qtyFmt(r.incoming_t), '+' + c(r.incoming, r.incoming_t), '+' + qtyFmt(r.incoming), 'green')}
+          ${Number(r.outgoing) ? tl('Списание', '−' + qtyFmt(r.outgoing_t), '−' + c(r.outgoing, r.outgoing_t), '−' + qtyFmt(r.outgoing), 'red') : ''}
+          ${tl('Продано в заказах', '−' + qtyFmt(soldT), '−' + qtyFmt(soldC), '−' + qtyFmt(r.sold), 'red')}
+          ${Number(r.shifted) ? `<div class="hint">в том числе переведено бухгалтером с нақд на перечисление: ${qtyFmt(r.shifted)}</div>` : ''}
+          ${tl('<b>Остаток</b>', qtyFmt(r.stock_t), qtyFmt(r.stock_c), qtyFmt(r.stock), Number(r.stock_t) < 0 || Number(r.stock_c) < 0 ? 'red' : '')}</div>`; })()}
+        ${r.stock !== null && (isOwner() || isFinance()) ? (() => {
+          const days = (r.sales || []).map((d) => ({ ...d, cash: Number(d.sold) - Number(d.sold_t) - Number(d.shifted) }));
+          const can = days.filter((d) => d.cash > 0.0001);
+          return `<h2>Продажи по дням</h2><div class="card"><div class="srow s4 hint"><span>День</span><span>Перечисл.</span><span>Нақд</span><span>Всего</span></div>
+            ${days.slice(0, 31).map((d) => `<div class="srow s4"><span>${fmtDate(d.day)}</span><span>${qtyFmt(Number(d.sold_t) + Number(d.shifted))}${Number(d.shifted) ? ` <span class="hint">(+${qtyFmt(d.shifted)})</span>` : ''}</span>
+              <span>${qtyFmt(d.cash)}</span><span>${qtyFmt(d.sold)}</span></div>`).join('') || '<div class="hint">Продаж пока не было</div>'}</div>
+            <h2>Нақд → перечисление</h2><div class="card"><div class="hint">Часть проданного за нақд / карту в этот день считать проданной по перечислению.
+              Перечисление уменьшится, нақд вырастет. Можно, пока остаток перечисления не меньше нуля (сейчас ${qtyFmt(r.stock_t)}).</div>
+              ${can.length && Number(r.stock_t) > 0 ? `<div style="display:flex;gap:6px;margin-top:8px"><select id="shDay">${can.map((d) => `<option value="${d.day}">${fmtDate(d.day)} · нақд ${qtyFmt(d.cash)}</option>`).join('')}</select>
+                <input type="number" inputmode="decimal" min="0" id="shQty" placeholder="шт." style="max-width:90px">
+                <button class="btn sm" data-act="shiftsave">Перевести</button></div>`
+                : `<div class="hint" style="margin-top:6px">${Number(r.stock_t) > 0 ? 'Нет продаж за нақд, которые можно перевести' : 'Остаток перечисления 0 — переводить нечего'}</div>`}</div>`; })() : ''}
         ${isOwner() ? `<h2>Минимум</h2><div class="card"><div class="hint">Когда остаток станет меньше — сигнал на дашборде и в Telegram.
             Хорошо продаётся — 50, медленно — 10.</div>
           <div style="display:flex;gap:6px;margin-top:8px"><input type="number" inputmode="numeric" id="minQty" value="${r.min_qty ?? ''}" placeholder="не задан">
             <button class="btn sm ghost" data-act="minset" data-v="50">50</button><button class="btn sm ghost" data-act="minset" data-v="10">10</button>
             <button class="btn sm" data-act="minsave">Сохранить</button></div></div>` : ''}
         <h2>Приход и списание</h2>
-        <div class="list">${r.moves.map((m) => `<div class="row"><div class="grow">${m.kind === 'in' ? 'Приход' : 'Списание'}
+        <div class="list">${r.moves.map((m) => `<div class="row"><div class="grow">${m.kind === 'shift' ? 'Нақд → перечисление' : (m.kind === 'in' ? 'Приход' : 'Списание') + (m.pay === 'transfer' ? ' · перечисление' : ' · нақд')}
             <div class="sub">${fmtDate(m.moved_at)}${m.comment ? ' · ' + esc(m.comment) : ''}</div></div>
-          <div class="amt ${m.kind === 'in' ? 'green' : 'red'}"><b>${m.kind === 'in' ? '+' : '−'}${qtyFmt(m.qty)}</b></div>
-          ${isOwner() ? `<button class="btn sm danger" data-act="movedel" data-id="${m.id}">✕</button>` : ''}</div>`).join('')
+          <div class="amt ${m.kind === 'in' ? 'green' : m.kind === 'shift' ? '' : 'red'}"><b>${m.kind === 'in' ? '+' : m.kind === 'shift' ? '' : '−'}${qtyFmt(m.qty)}</b></div>
+          ${isOwner() || (isFinance() && m.kind === 'shift') ? `<button class="btn sm danger" data-act="movedel" data-id="${m.id}">✕</button>` : ''}</div>`).join('')
           || '<div class="row hint">Пока не было</div>'}</div>
         ${r.counts.length ? `<h2>Остатки на начало месяца</h2><div class="list">${r.counts.map((c) => `<div class="row"><span class="grow">${fmtDate(c.month)}</span>
-          <span class="amt">${qtyFmt(c.qty)}</span></div>`).join('')}</div>` : ''}`;
+          <span class="amt">П ${qtyFmt(c.qty_t)} · Н ${qtyFmt(c.qty)} · <b>${qtyFmt(Number(c.qty) + Number(c.qty_t))}</b></span></div>`).join('')}</div>` : ''}`;
     },
 
     // приход нового товара или списание: несколько товаров за раз
@@ -710,6 +734,8 @@
       return `<h1>${out ? 'Списание' : 'Приход товара'}</h1>
         <div class="card">
           <label style="margin-top:0">Дата</label><input type="date" id="mvDate" value="${today()}">
+          <label>${out ? 'Списать с остатка' : 'Товар куплен'}</label>
+          <select id="mvPay"><option value="cash">Нақд</option><option value="transfer">Перечисление</option></select>
           <label>Товары</label><div id="moveItems"></div>
           <button class="btn sm ghost" style="margin-top:8px" data-act="mvadd">+ Ещё товар</button>
           <div class="hint" style="margin-top:6px">Нового товара нет в списке? Добавьте его на странице «Остатки на начало месяца и минимумы».</div>
@@ -726,13 +752,15 @@
       const val = (r, f, def) => (draft[r.product] && draft[r.product][f] !== undefined ? draft[r.product][f] : def);
       return `<h1>Остатки на начало месяца</h1>
         <div class="card"><label style="margin-top:0">Месяц</label><input type="month" value="${month}" data-input="scmonth">
-          <div class="hint" style="margin-top:8px">Пересчитайте товар и впишите, сколько было на 1-е число. Пустое поле не меняется.
+          <div class="hint" style="margin-top:8px">Пересчитайте товар и впишите, сколько было на 1-е число: отдельно купленное по перечислению и за нақд.
+            Если оба поля пустые — остаток не меняется; одно пустое — считается 0.
             Минимум: когда остаток станет меньше, придёт сигнал (хорошо продаётся — 50, медленно — 10).</div></div>
-        <div class="card"><div class="srow hint"><span>Товар</span><span>Остаток</span><span>Минимум</span></div>
-          ${rows.map((r) => `<div class="srow" data-product="${esc(r.product)}"><span>${esc(r.product)}</span>
-            <input type="number" inputmode="numeric" min="0" data-f="qty" value="${esc(val(r, 'qty', r.base_date === month + '-01' ? qtyFmt(r.opening).replace(',', '.') : ''))}"
-              placeholder="${r.stock === null ? '' : qtyFmt(r.stock)}">
-            <input type="number" inputmode="numeric" min="0" data-f="min" value="${esc(val(r, 'min', r.min_qty ?? ''))}" data-orig="${r.min_qty ?? ''}"></div>`).join('')}
+        <div class="card"><div class="srow s4 hint"><span>Товар</span><span>Перечисл.</span><span>Нақд</span><span>Минимум</span></div>
+          ${rows.map((r) => { const cur = r.base_date === month + '-01', n = (x) => qtyFmt(x).replace(',', '.');
+            return `<div class="srow s4" data-product="${esc(r.product)}"><span>${esc(r.product)}${r.stock === null ? '' : `<div class="hint">сейчас П ${qtyFmt(r.stock_t)} · Н ${qtyFmt(r.stock_c)}</div>`}</span>
+            <input type="number" inputmode="numeric" min="0" data-f="qty_t" value="${esc(val(r, 'qty_t', cur ? n(r.opening_t) : ''))}">
+            <input type="number" inputmode="numeric" min="0" data-f="qty" value="${esc(val(r, 'qty', cur ? n(Number(r.opening) - Number(r.opening_t)) : ''))}">
+            <input type="number" inputmode="numeric" min="0" data-f="min" value="${esc(val(r, 'min', r.min_qty ?? ''))}" data-orig="${r.min_qty ?? ''}"></div>`; }).join('')}
           <label>Товара нет в списке? Добавьте его</label>
           <div style="display:flex;gap:6px"><input id="newProduct" placeholder="Название, например R45" autocomplete="off">
             <button class="btn sm" data-act="stockadd">Добавить</button></div></div>
@@ -1259,13 +1287,21 @@
       if (!ok.length) return toast('Выберите товар и количество');
       el.disabled = true;
       try {
-        await call('stock_in', { kind: v.kind, items: ok, moved_at: document.getElementById('mvDate').value, comment: document.getElementById('mvComment').value });
+        await call('stock_in', { kind: v.kind, pay: document.getElementById('mvPay').value, items: ok, moved_at: document.getElementById('mvDate').value, comment: document.getElementById('mvComment').value });
         haptic('success'); toast(v.kind === 'out' ? 'Списано' : 'Приход сохранён'); pop();
       } catch { el.disabled = false; }
     },
     async movedel(el) {
       if (!(await ask('Удалить эту запись прихода / списания?'))) return;
       await call('stock_move_delete', { id: Number(el.dataset.id) }); toast('Удалено'); render();
+    },
+    async shiftsave(el) {
+      const v = S.stack[S.stack.length - 1], qty = Number(document.getElementById('shQty').value), day = document.getElementById('shDay').value;
+      if (!(qty > 0)) return toast('Укажите количество');
+      if (!(await ask(`Перевести ${qtyFmt(qty)} шт. за ${fmtDate(day)} с нақд на перечисление?`))) return;
+      el.disabled = true;
+      try { await call('stock_shift', { product: v.product, day, qty }); haptic('success'); toast('Переведено'); render(); }
+      catch { el.disabled = false; }
     },
     minset: (el) => { document.getElementById('minQty').value = el.dataset.v; },
     async minsave(el) {
@@ -1281,27 +1317,27 @@
       if (S.dicts.products.some((x) => x.name.toLowerCase() === name.toLowerCase())) return toast('Такой товар уже есть в списке');
       v.draft = {}; // не теряем уже вписанные цифры
       document.querySelectorAll('.srow[data-product]').forEach((r) => {
-        v.draft[r.dataset.product] = { qty: r.querySelector('[data-f=qty]').value, min: r.querySelector('[data-f=min]').value };
+        v.draft[r.dataset.product] = { qty: r.querySelector('[data-f=qty]').value, qty_t: r.querySelector('[data-f=qty_t]').value, min: r.querySelector('[data-f=min]').value };
       });
       v.month = $app.querySelector('[data-input=scmonth]').value || v.month;
       el.disabled = true;
       try {
         setMe(await call('dict_add', { kind: 'products', name })); haptic('success'); toast(`Добавлен: ${name}`);
         await render();
-        const row = $app.querySelector(`.srow[data-product="${CSS.escape(name)}"] [data-f=qty]`);
+        const row = $app.querySelector(`.srow[data-product="${CSS.escape(name)}"] [data-f=qty_t]`);
         if (row) { row.scrollIntoView({ block: 'center' }); row.focus(); }
       } catch { el.disabled = false; }
     },
     async scsave(el) {
       const month = $app.querySelector('[data-input=scmonth]').value;
       const rows = [...document.querySelectorAll('.srow[data-product]')].map((r) => {
-        const qty = r.querySelector('[data-f=qty]').value.trim(), min = r.querySelector('[data-f=min]');
-        const row = { product: r.dataset.product, qty };
+        const qty = r.querySelector('[data-f=qty]').value.trim(), qty_t = r.querySelector('[data-f=qty_t]').value.trim(), min = r.querySelector('[data-f=min]');
+        const row = { product: r.dataset.product, qty, qty_t };
         if (min.value.trim() !== min.dataset.orig) row.min_qty = min.value.trim(); // минимум шлём только изменённый
         return row;
-      }).filter((r) => r.qty !== '' || r.min_qty !== undefined);
+      }).filter((r) => r.qty !== '' || r.qty_t !== '' || r.min_qty !== undefined);
       if (!rows.length) return toast('Ничего не изменено');
-      if (rows.some((r) => r.qty !== '') && !month) return toast('Укажите месяц');
+      if (rows.some((r) => r.qty !== '' || r.qty_t !== '') && !month) return toast('Укажите месяц');
       el.disabled = true;
       try { await call('stock_count', { month, rows }); haptic('success'); toast('Сохранено'); pop(); }
       catch { el.disabled = false; }
